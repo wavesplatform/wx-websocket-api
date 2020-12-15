@@ -4,19 +4,18 @@ use std::convert::TryFrom;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigFile {
-    name: String,
-    path: Option<String>,
+    path: String,
 }
 
 impl From<ConfigFile> for String {
     fn from(c: ConfigFile) -> Self {
-        format!("{}{}", c.path.unwrap_or("/".to_string()), c.name)
+        c.path
     }
 }
 
 impl From<&ConfigFile> for String {
     fn from(c: &ConfigFile) -> Self {
-        format!("{}{}", c.path.as_ref().unwrap_or(&"/".to_string()), c.name)
+        c.path.to_owned()
     }
 }
 
@@ -24,21 +23,11 @@ impl TryFrom<&str> for ConfigFile {
     type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let p = std::path::Path::new(s);
+        let p = std::path::Path::new(s)
+            .to_str()
+            .ok_or(Error::InvalidConfigPath(s.to_owned()))?;
 
-        let name = p
-            .file_name()
-            .ok_or(Error::EmptyFilename(s.to_owned()))
-            .and_then(|n| n.to_str().ok_or(Error::InvalidFilename(s.to_owned())))?;
-        let path = p
-            .parent()
-            .and_then(|path| path.to_str())
-            .map(|s| s.to_owned());
-
-        Ok(ConfigFile {
-            name: name.to_owned(),
-            path: path,
-        })
+        Ok(ConfigFile { path: p.to_owned() })
     }
 }
 

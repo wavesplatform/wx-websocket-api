@@ -1,7 +1,7 @@
 use crate::repo::Repo;
 use crate::{error::Error, updater::UpdateResource};
 use crate::{
-    messages::{IncomeMessage, PreOutcomeMessage, OutcomeMessage, SubscribeMessage},
+    messages::{IncomeMessage, OutcomeMessage, PreOutcomeMessage, SubscribeMessage},
     ConnectionId,
 };
 use crate::{Connections, Subscribtions};
