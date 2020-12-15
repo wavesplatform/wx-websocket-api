@@ -12,8 +12,6 @@ pub enum Error {
     RedisPoolError(#[from] bb8_redis::redis::RedisError),
     #[error("RunRedisError: {0}")]
     RunRedisError(#[from] bb8::RunError<bb8_redis::redis::RedisError>),
-    #[error("ParseError: {0}")]
-    ParseError(#[from] url::ParseError),
     #[error("InvalidUpdateResource: {0}")]
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]
