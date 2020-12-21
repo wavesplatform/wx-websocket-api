@@ -36,6 +36,7 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
         .and(with_subscriptions.clone())
         .map(
             |ws: warp::ws::Ws, repo: Arc<R>, connections, subscriptions| {
+                info!("new web-socket connection");
                 ws.on_upgrade(move |socket| {
                     handle_connection(socket, connections, subscriptions, repo)
                         .map(|result| result.unwrap())
