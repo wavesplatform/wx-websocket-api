@@ -1,4 +1,4 @@
-use crate::models::{ConfigOptions, StateOptions};
+use crate::models::ConfigOptions;
 use crate::updater::UpdateResource;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
@@ -29,14 +29,12 @@ impl From<IncomeMessage> for warp::ws::Message {
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum SubscribeMessage {
     Config { options: ConfigOptions },
-    State { options: StateOptions },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum UnsubscribeMessage {
     Config { options: ConfigOptions },
-    State { options: StateOptions },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

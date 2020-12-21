@@ -19,7 +19,7 @@ struct FlatAppConfig {
 #[derive(Deserialize)]
 struct FlatRepoConfig {
     pub host: String,
-    pub subscriptions_counter_key: String,
+    pub subscriptions_key: String,
 }
 
 pub fn load_repo() -> Result<repo::Config, Error> {
@@ -27,7 +27,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
 
     Ok(repo::Config {
         host: flat_config.host,
-        subscriptions_counter_key: flat_config.subscriptions_counter_key,
+        subscriptions_key: flat_config.subscriptions_key,
     })
 }
 

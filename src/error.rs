@@ -1,3 +1,5 @@
+use std::sync::mpsc::RecvError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("ConfigLoadError: {0}")]
@@ -12,10 +14,12 @@ pub enum Error {
     RedisPoolError(#[from] bb8_redis::redis::RedisError),
     #[error("RunRedisError: {0}")]
     RunRedisError(#[from] bb8::RunError<bb8_redis::redis::RedisError>),
+    #[error("RedisError: {0}")]
+    RedisPool(#[from] redis::RedisError),
     #[error("InvalidUpdateResource: {0}")]
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]
     InvalidConfigPath(String),
-    #[error("InvalidStateEntry: {0}")]
-    InvalidStateEntry(String),
+    #[error("RecvError: {0}")]
+    RecvError(#[from] RecvError),
 }

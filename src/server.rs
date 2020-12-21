@@ -1,17 +1,18 @@
-use crate::repo::Repo;
 use crate::{error::Error, updater::UpdateResource};
 use crate::{
     messages::{IncomeMessage, OutcomeMessage, PreOutcomeMessage, SubscribeMessage},
     ConnectionId,
 };
+use crate::{repo::Repo, Connection};
 use crate::{Connections, Subscribtions};
-use futures::{future::try_join_all, FutureExt, StreamExt};
+use futures::{future::try_join_all, FutureExt, SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use warp::{ws, Filter};
 use wavesexchange_log::{debug, error, info};
+use wavesexchange_warp::log;
 
 pub async fn start<R: Repo + Sync + Send + 'static>(
     server_port: u16,
@@ -43,7 +44,9 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
 
     info!("websocket server listening on :{}", server_port);
 
-    warp::serve(routes).run(([0, 0, 0, 0], server_port)).await;
+    warp::serve(routes.with(warp::log::custom(log::access)))
+        .run(([0, 0, 0, 0], server_port))
+        .await;
 }
 
 async fn handle_connection<R: Repo + Sync + Send + 'static>(
@@ -55,20 +58,26 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
     let connection_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
 
     let (ws_tx, mut ws_rx) = socket.split();
-    let (tx, rx) = mpsc::unbounded_channel::<PreOutcomeMessage>();
+    let (tx, rx) = crossfire::mpsc::unbounded_future::<PreOutcomeMessage>();
 
-    let tx = Arc::new(RwLock::new(tx));
+    let ws_tx = Arc::new(RwLock::new(ws_tx));
+    let tx = Arc::new(tx);
 
+    let repo2 = repo.clone();
+    let ws_tx2 = ws_tx.clone();
     // forward messages to ws connection
-    tokio::task::spawn({
-        let repo = repo.clone();
-        rx.then(move |message| on_pre_outcome_message(repo.clone(), message))
-            .forward(ws_tx)
-            .map(|result| {
-                if let Err(e) = result {
-                    error!("websocket send error: {}", e);
-                }
-            })
+    tokio::task::spawn(async move {
+        while let Ok(msg) = rx.recv_blocking() {
+            let msg = on_pre_outcome_message(repo2.clone(), msg).await.unwrap();
+
+            let mut ws_tx_write_guard = ws_tx2.write().await;
+            if let Err(err) = ws_tx_write_guard.send(msg).await {
+                error!(
+                    "error occurred while sending message to ws client: {:?}",
+                    err
+                );
+            }
+        }
     });
 
     connections.write().await.insert(connection_id, tx.clone());
@@ -98,7 +107,7 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
     }
 
     // handle closed connection
-    on_disconnect(repo.clone(), &connection_id, connections, subscriptions).await?;
+    on_disconnect(repo, &connection_id, connections, subscriptions).await?;
 
     Ok(())
 }
@@ -118,6 +127,7 @@ async fn on_pre_outcome_message<R: Repo>(
                 resource: update,
                 value: value,
             });
+
             Ok(res)
         }
     }
@@ -125,7 +135,7 @@ async fn on_pre_outcome_message<R: Repo>(
 
 async fn on_message<R: Repo>(
     repo: Arc<R>,
-    tx: Arc<RwLock<tokio::sync::mpsc::UnboundedSender<PreOutcomeMessage>>>,
+    tx: Connection,
     subscriptions: Subscribtions,
     connection_id: ConnectionId,
     msg: ws::Message,
@@ -133,31 +143,44 @@ async fn on_message<R: Repo>(
     let msg = IncomeMessage::try_from(msg)?;
 
     match msg {
-        IncomeMessage::Ping => match tx.write().await.send(PreOutcomeMessage::Pong) {
+        IncomeMessage::Ping => match tx.send(PreOutcomeMessage::Pong) {
             Ok(()) => (),
             Err(_disconnected) => {}
         },
         IncomeMessage::Subscribe(SubscribeMessage::Config {
             options: config_options,
         }) => {
-            let mut lock = subscriptions.write().await;
-            let connection_subscriptions = lock.entry(connection_id).or_insert(HashSet::new());
+            let mut subscriptions_write_guard = subscriptions.write().await;
+            let connection_subscriptions = subscriptions_write_guard
+                .entry(connection_id)
+                .or_insert(HashSet::new());
 
             if let Some(file) = &config_options.file {
                 let update_resource = UpdateResource::Config(file.to_owned());
                 let subscription_key = String::from(&update_resource);
 
-                repo.subscribe(subscription_key.clone()).await?;
+                if !connection_subscriptions.contains(&subscription_key) {
+                    repo.subscribe(subscription_key.clone()).await?;
 
-                connection_subscriptions.insert(subscription_key);
+                    connection_subscriptions.insert(subscription_key);
+                }
             } else if let Some(files) = &config_options.files {
-                let fs = files.iter().map(|file| {
-                    let update_resource = UpdateResource::Config(file.to_owned());
-                    let subscription_key = String::from(&update_resource);
+                let fs = files
+                    .iter()
+                    .filter_map(|file| {
+                        let update_resource = UpdateResource::Config(file.to_owned());
+                        let subscription_key = String::from(&update_resource);
 
-                    repo.subscribe(subscription_key.clone())
-                        .map(|res| res.map(|_| subscription_key))
-                });
+                        if connection_subscriptions.contains(&subscription_key) {
+                            None
+                        } else {
+                            Some(subscription_key)
+                        }
+                    })
+                    .map(|subscription_key| {
+                        repo.subscribe(subscription_key.clone())
+                            .map(|res| res.map(|_| subscription_key))
+                    });
 
                 let subscribe_result = futures::future::join_all(fs)
                     .await
@@ -169,7 +192,50 @@ async fn on_message<R: Repo>(
                 });
             }
         }
-        _ => unimplemented!("another message type are not implemented yet"),
+        IncomeMessage::Unsubscribe(crate::messages::UnsubscribeMessage::Config {
+            options: config_options,
+        }) => {
+            let mut subscriptions_write_guard = subscriptions.write().await;
+            let connection_subscriptions = subscriptions_write_guard
+                .entry(connection_id)
+                .or_insert(HashSet::new());
+
+            if let Some(file) = &config_options.file {
+                let update_resource = UpdateResource::Config(file.to_owned());
+                let subscription_key = String::from(&update_resource);
+
+                if connection_subscriptions.contains(&subscription_key) {
+                    repo.unsubscribe(subscription_key.clone()).await?;
+                    connection_subscriptions.remove(&subscription_key);
+                }
+            } else if let Some(files) = &config_options.files {
+                let fs = files
+                    .iter()
+                    .filter_map(|file| {
+                        let update_resource = UpdateResource::Config(file.to_owned());
+                        let subscription_key = String::from(&update_resource);
+
+                        if connection_subscriptions.contains(&subscription_key) {
+                            Some(subscription_key)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|subscription_key| {
+                        repo.unsubscribe(subscription_key.clone())
+                            .map(|res| res.map(|_| subscription_key))
+                    });
+
+                let subscribe_result = futures::future::join_all(fs)
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<String>, Error>>()?;
+
+                subscribe_result.into_iter().for_each(|subscription_key| {
+                    connection_subscriptions.remove(&subscription_key);
+                });
+            }
+        }
     }
 
     Ok(())

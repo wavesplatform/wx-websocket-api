@@ -7,19 +7,19 @@ mod server;
 mod updater;
 
 use bb8_redis::{bb8, RedisConnectionManager};
+use crossfire::mpsc;
 use error::Error;
+use messages::PreOutcomeMessage;
 use repo::RepoImpl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use wavesexchange_log::{error, info};
 
 pub type ConnectionId = usize;
 
-pub type Connections = Arc<
-    RwLock<HashMap<ConnectionId, Arc<RwLock<mpsc::UnboundedSender<messages::PreOutcomeMessage>>>>>,
->;
+pub type Connection = Arc<mpsc::TxUnbounded<PreOutcomeMessage>>;
+pub type Connections = Arc<RwLock<HashMap<ConnectionId, Connection>>>;
 
 pub type Subscribtions = Arc<RwLock<HashMap<ConnectionId, HashSet<String>>>>;
 
@@ -28,16 +28,17 @@ async fn main() -> Result<(), Error> {
     let app_config = config::load_app()?;
     let repo_config = config::load_repo()?;
 
-    let manager = RedisConnectionManager::new(repo_config.host).unwrap();
+    let manager = RedisConnectionManager::new(repo_config.host.clone()).unwrap();
     let pool = bb8::Pool::builder().build(manager).await.unwrap();
-    let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_counter_key);
+    let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_key);
 
     let connections: Connections = Connections::default();
     let subscriptions: Subscribtions = Subscribtions::default();
 
+    let redis_conn = redis::Client::open(repo_config.host)?;
     let updates_handle = tokio::task::spawn({
         info!("updater started");
-        updater::run(connections.clone(), subscriptions.clone(), pool.clone())
+        updater::run(connections.clone(), subscriptions.clone(), redis_conn)
     });
 
     server::start(app_config.port, repo, connections, subscriptions).await;

@@ -6,21 +6,20 @@ const CONNECTION_ID_KEY: &str = "NEXT_CONNECTION_ID";
 
 pub struct Config {
     pub host: String,
-    pub subscriptions_counter_key: String,
+    pub subscriptions_key: String,
 }
 
 #[async_trait]
 pub trait Repo {
     async fn get_connection_id(&self) -> Result<ConnectionId, Error>;
 
-    // HEXISTS REDIS_SUBSCRIPTIONS_COUNTER_KEY <key>?
-    // Y: HINCRBY REDIS_SUBSCRIPTIONS_COUNTER_KEY <key> 1
-    // N: HSET REDIS_SUBSCRIPTIONS_COUNTER_KEY <key> 1
-    // PSUBSCRIBE __keyspace*__:<key>
+    // HEXISTS REDIS_SUBSCRIPTIONS_KEY <key>?
+    // Y: HINCRBY REDIS_SUBSCRIPTIONS_KEY <key> 1
+    // N: HSET REDIS_SUBSCRIPTIONS_KEY <key> 1
     async fn subscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error>;
 
-    // HINCRBY REDIS_SUBSCRIPTIONS_COUNTER_KEY <key> -1
-    async fn unsubscribe(&self, key: &str) -> Result<(), Error>;
+    // HINCRBY REDIS_SUBSCRIPTIONS_KEY <key> -1
+    async fn unsubscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error>;
 
     // GET <key>
     async fn get_by_key(&self, key: &str) -> Result<String, Error>;
@@ -28,17 +27,17 @@ pub trait Repo {
 
 pub struct RepoImpl {
     pool: bb8::Pool<RedisConnectionManager>,
-    subscriptions_counter_key: String,
+    subscriptions_key: String,
 }
 
 impl RepoImpl {
     pub fn new(
         pool: bb8::Pool<RedisConnectionManager>,
-        subscriptions_counter_key: impl AsRef<str>,
+        subscriptions_key: impl AsRef<str>,
     ) -> RepoImpl {
         RepoImpl {
             pool,
-            subscriptions_counter_key: subscriptions_counter_key.as_ref().to_owned(),
+            subscriptions_key: subscriptions_key.as_ref().to_owned(),
         }
     }
 }
@@ -56,16 +55,14 @@ impl Repo for RepoImpl {
 
         let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
 
-        let exists = con
-            .hexists(&self.subscriptions_counter_key, key.clone())
-            .await?;
+        let exists = con.hexists(&self.subscriptions_key, key.clone()).await?;
 
         if exists {
-            con.hincr(&self.subscriptions_counter_key, key, 1)
+            con.hincr(&self.subscriptions_key, key, 1)
                 .await
                 .map_err(|e| Error::from(e))?;
         } else {
-            con.hset(&self.subscriptions_counter_key, key, 1)
+            con.hset(&self.subscriptions_key, key, 1)
                 .await
                 .map_err(|e| Error::from(e))?;
         }
@@ -73,10 +70,12 @@ impl Repo for RepoImpl {
         Ok(())
     }
 
-    async fn unsubscribe(&self, key: &str) -> Result<(), Error> {
+    async fn unsubscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error> {
+        let key = key.into();
+
         let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
 
-        con.hincr(&self.subscriptions_counter_key, key, -1)
+        con.hincr(&self.subscriptions_key, key, -1)
             .await
             .map_err(|e| Error::from(e))
     }
