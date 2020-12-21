@@ -48,7 +48,7 @@ pub async fn run(
     subscriptions: Subscribtions,
     redis_client: redis::Client,
 ) -> Result<(), Error> {
-    let mut conn = redis_client.get_connection().unwrap();
+    let mut conn = redis_client.get_connection()?;
     let mut pubsub = conn.as_pubsub();
 
     pubsub.psubscribe("__keyevent*__:*")?;
