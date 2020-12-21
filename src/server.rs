@@ -68,7 +68,7 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
     let repo2 = repo.clone();
     let ws_tx2 = ws_tx.clone();
     // forward messages to ws connection
-    tokio::task::spawn(async move {
+    let forward_messages_handle = tokio::task::spawn(async move {
         while let Ok(msg) = rx.recv_blocking() {
             let msg = on_pre_outcome_message(repo2.clone(), msg).await.unwrap();
 
@@ -110,6 +110,10 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
 
     // handle closed connection
     on_disconnect(repo, &connection_id, connections, subscriptions).await?;
+
+    if let Err(err) = tokio::try_join!(forward_messages_handle) {
+        error!("forward messages error: {}", err);
+    }
 
     Ok(())
 }
