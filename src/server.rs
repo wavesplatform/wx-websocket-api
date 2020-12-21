@@ -28,7 +28,8 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
         warp::any().map(move || repo.clone())
     };
 
-    let routes = warp::path::end()
+    let routes = warp::path("ws")
+        .and(warp::path::end())
         .and(warp::ws())
         .and(with_repo.clone())
         .and(with_connections.clone())
