@@ -25,6 +25,7 @@ struct FlatRepoConfig {
     pub host: String,
     #[serde(default = "default_repo_port")]
     pub port: u16,
+    pub username: String,
     pub password: String,
     pub subscriptions_key: String,
 }
@@ -35,6 +36,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
     Ok(repo::Config {
         host: flat_config.host,
         port: flat_config.port,
+        username: flat_config.username,
         password: flat_config.password,
         subscriptions_key: flat_config.subscriptions_key,
     })
