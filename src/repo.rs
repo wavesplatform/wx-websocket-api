@@ -6,6 +6,8 @@ const CONNECTION_ID_KEY: &str = "NEXT_CONNECTION_ID";
 
 pub struct Config {
     pub host: String,
+    pub password: String,
+    pub port: u16,
     pub subscriptions_key: String,
 }
 

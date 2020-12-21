@@ -28,14 +28,19 @@ async fn main() -> Result<(), Error> {
     let app_config = config::load_app()?;
     let repo_config = config::load_repo()?;
 
-    let manager = RedisConnectionManager::new(repo_config.host.clone()).unwrap();
+    let redis_connection_url = format!(
+        "redis://{}@{}:{}/",
+        repo_config.password, repo_config.host, repo_config.port
+    );
+    
+    let manager = RedisConnectionManager::new(redis_connection_url.clone()).unwrap();
     let pool = bb8::Pool::builder().build(manager).await.unwrap();
     let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_key);
 
     let connections: Connections = Connections::default();
     let subscriptions: Subscribtions = Subscribtions::default();
 
-    let redis_conn = redis::Client::open(repo_config.host)?;
+    let redis_conn = redis::Client::open(redis_connection_url)?;
     let updates_handle = tokio::task::spawn({
         info!("updater started");
         updater::run(connections.clone(), subscriptions.clone(), redis_conn)

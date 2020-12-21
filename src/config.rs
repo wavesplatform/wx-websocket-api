@@ -6,6 +6,10 @@ fn default_port() -> u16 {
     8080
 }
 
+fn default_repo_port() -> u16 {
+    6379
+}
+
 pub struct AppConfig {
     pub port: u16,
 }
@@ -19,6 +23,9 @@ struct FlatAppConfig {
 #[derive(Deserialize)]
 struct FlatRepoConfig {
     pub host: String,
+    #[serde(default = "default_repo_port")]
+    pub port: u16,
+    pub password: String,
     pub subscriptions_key: String,
 }
 
@@ -27,6 +34,8 @@ pub fn load_repo() -> Result<repo::Config, Error> {
 
     Ok(repo::Config {
         host: flat_config.host,
+        port: flat_config.port,
+        password: flat_config.password,
         subscriptions_key: flat_config.subscriptions_key,
     })
 }
