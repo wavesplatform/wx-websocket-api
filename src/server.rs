@@ -70,7 +70,7 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
     // forward messages to ws connection
     let forward_messages_handle = tokio::task::spawn(async move {
         info!("starting new task for messages forwarding");
-        while let Ok(msg) = rx.recv_blocking() {
+        while let Ok(msg) = rx.recv().await {
             let msg = on_pre_outcome_message(repo2.clone(), msg).await.unwrap();
 
             let mut ws_tx_write_guard = ws_tx2.write().await;
