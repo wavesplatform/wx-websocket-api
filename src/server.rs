@@ -69,6 +69,7 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
     let ws_tx2 = ws_tx.clone();
     // forward messages to ws connection
     let forward_messages_handle = tokio::task::spawn(async move {
+        info!("starting new task for messages forwarding");
         while let Ok(msg) = rx.recv_blocking() {
             let msg = on_pre_outcome_message(repo2.clone(), msg).await.unwrap();
 
@@ -86,6 +87,7 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
 
     // ws connection messages processing
     while let Some(next_msg_result) = ws_rx.next().await {
+        info!("got next message from ws client");
         let msg = match next_msg_result {
             Ok(msg) => msg,
             Err(_disconnected) => {
@@ -147,7 +149,7 @@ async fn on_message<R: Repo>(
     msg: ws::Message,
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(msg)?;
-
+    info!("on_message {:?}", msg);
     match msg {
         IncomeMessage::Ping => match tx.send(PreOutcomeMessage::Pong) {
             Ok(()) => (),
