@@ -82,9 +82,9 @@ async fn handle_connection<R: Repo + Sync + Send + 'static>(
             }
         }
     });
-
+    info!("add new connection {:?}", connection_id);
     connections.write().await.insert(connection_id, tx.clone());
-
+    info!("new connection saved");
     // ws connection messages processing
     while let Some(next_msg_result) = ws_rx.next().await {
         info!("got next message from ws client");
