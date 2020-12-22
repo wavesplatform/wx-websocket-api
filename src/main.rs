@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use wavesexchange_log::{error, info};
+use tracing_subscriber;
 
 pub type ConnectionId = usize;
 
@@ -25,6 +26,9 @@ pub type Subscribtions = Arc<RwLock<HashMap<ConnectionId, HashSet<String>>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // install global collector configured based on RUST_LOG env var.
+    tracing_subscriber::fmt::init();
+
     let app_config = config::load_app()?;
     let repo_config = config::load_repo()?;
 
