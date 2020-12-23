@@ -319,18 +319,13 @@ async fn on_disconnect<R: Repo>(
     connections: Connections,
     subscriptions: Subscribtions,
 ) -> Result<(), Error> {
-    let connection_subscriptions = subscriptions
-        .read()
-        .await
-        .get(connection_id)
-        .cloned()
-        .ok_or(Error::UnknownConnectionId)?;
+    if let Some(connection_subscriptions) = subscriptions.read().await.get(connection_id) {
+        let fs = connection_subscriptions
+            .iter()
+            .map(|subscription_key| repo.unsubscribe(subscription_key));
 
-    let fs = connection_subscriptions
-        .iter()
-        .map(|subscription_key| repo.unsubscribe(subscription_key));
-
-    try_join_all(fs).await?;
+        try_join_all(fs).await?;
+    }
 
     connections.write().await.remove(connection_id);
 
