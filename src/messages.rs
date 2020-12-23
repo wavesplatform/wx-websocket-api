@@ -45,6 +45,12 @@ pub enum OutcomeMessage {
         resource: UpdateResource,
         value: String,
     },
+    SubscribeSuccess {
+        resources: Vec<UpdateResource>,
+    },
+    UnsubscribeSuccess {
+        resources: Vec<UpdateResource>,
+    },
 }
 
 impl From<OutcomeMessage> for ws::Message {
@@ -58,4 +64,6 @@ impl From<OutcomeMessage> for ws::Message {
 pub enum PreOutcomeMessage {
     Pong,
     Update(UpdateResource),
+    SubscribeSuccess(Vec<UpdateResource>),
+    UnsubscribeSuccess(Vec<UpdateResource>),
 }

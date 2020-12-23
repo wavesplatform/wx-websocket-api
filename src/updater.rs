@@ -41,6 +41,12 @@ impl From<&UpdateResource> for String {
     }
 }
 
+impl ToString for UpdateResource {
+    fn to_string(&self) -> String {
+        self.into()
+    }
+}
+
 // NB: redis server have to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
 pub async fn run(

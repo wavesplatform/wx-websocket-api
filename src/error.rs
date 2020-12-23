@@ -1,3 +1,4 @@
+use crate::messages::PreOutcomeMessage;
 use std::sync::mpsc::RecvError;
 
 #[derive(Debug, thiserror::Error)]
@@ -16,10 +17,18 @@ pub enum Error {
     RunRedisError(#[from] bb8::RunError<bb8_redis::redis::RedisError>),
     #[error("RedisError: {0}")]
     RedisPool(#[from] redis::RedisError),
+    #[error("CrossbeamSendError: {0}")]
+    CrossbeamSendError(#[from] crossbeam::channel::SendError<PreOutcomeMessage>),
     #[error("InvalidUpdateResource: {0}")]
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]
     InvalidConfigPath(String),
     #[error("RecvError: {0}")]
     RecvError(#[from] RecvError),
+    #[error("InvalidSubscribeMessage")]
+    InvalidSubscribeMessage,
+    #[error("InvalidUnsubscribeMessage")]
+    InvalidUnsubscribeMessage,
+    #[error("UnknownConnectionId")]
+    UnknownConnectionId,
 }

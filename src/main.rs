@@ -7,19 +7,18 @@ mod server;
 mod updater;
 
 use bb8_redis::{bb8, RedisConnectionManager};
-use crossfire::mpsc;
 use error::Error;
 use messages::PreOutcomeMessage;
 use repo::RepoImpl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use wavesexchange_log::{error, info};
 use tracing_subscriber;
+use wavesexchange_log::{error, info};
 
 pub type ConnectionId = usize;
 
-pub type Connection = Arc<mpsc::TxUnbounded<PreOutcomeMessage>>;
+pub type Connection = Arc<crossbeam::channel::Sender<PreOutcomeMessage>>;
 pub type Connections = Arc<RwLock<HashMap<ConnectionId, Connection>>>;
 
 pub type Subscribtions = Arc<RwLock<HashMap<ConnectionId, HashSet<String>>>>;
