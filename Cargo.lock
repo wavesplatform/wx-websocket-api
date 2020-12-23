@@ -1450,6 +1450,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_qs"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5cb0f0564a84554436c4ceff5c896308d4e09d0eb4bd0215b8f698f88084601"
+dependencies = [
+ "percent-encoding",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1985,7 +1996,7 @@ checksum = "1a143597ca7c7793eff794def352d41792a93c481eb1042423ff7ff72ba2c31f"
 [[package]]
 name = "wavesexchange_log"
 version = "0.1.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs#2e930088dff3421e25ad107ff84434c95d7310b1"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs#0d8b3e8e2642e932fa08631db65c9483f0dc9d68"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1997,13 +2008,14 @@ dependencies = [
 
 [[package]]
 name = "wavesexchange_warp"
-version = "0.4.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs#2e930088dff3421e25ad107ff84434c95d7310b1"
+version = "0.5.0"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs#0d8b3e8e2642e932fa08631db65c9483f0dc9d68"
 dependencies = [
  "futures",
  "once_cell",
  "serde",
  "serde_json",
+ "serde_qs",
  "warp",
  "wavesexchange_log",
 ]
