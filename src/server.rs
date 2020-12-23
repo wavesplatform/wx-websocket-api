@@ -29,7 +29,7 @@ fn access(info: warp::log::Info) {
         "req_id" => req_id,
         "ip" => info.remote_addr().map(|a| format!("{}", a.ip())),
         "protocol" => format!("{:?}", info.version()),
-        "headers" => format!("{:?}", info.request_headers())
+        "connection" => format!("{:?}", info.request_headers().get("connection").map(|h| h.to_str().unwrap_or(&"")))
     );
 }
 
