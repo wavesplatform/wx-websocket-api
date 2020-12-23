@@ -12,7 +12,26 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::{ws, Filter};
 use wavesexchange_log::{debug, error, info};
-use wavesexchange_warp::log;
+
+fn access(info: warp::log::Info) {
+    let req_id = info
+        .request_headers()
+        .get("x-request-id")
+        .map(|h| h.to_str().unwrap_or(&""));
+
+    info!(
+        "access";
+        "path" => info.path(),
+        "method" => info.method().to_string(),
+        "status" => info.status().as_u16(),
+        "ua" => info.user_agent(),
+        "latency" => info.elapsed().as_millis(),
+        "req_id" => req_id,
+        "ip" => info.remote_addr().map(|a| format!("{}", a.ip())),
+        "protocol" => format!("{:?}", info.version()),
+        "headers" => format!("{:?}", info.request_headers())
+    );
+}
 
 pub async fn start<R: Repo + Sync + Send + 'static>(
     server_port: u16,
@@ -45,7 +64,7 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
 
     info!("websocket server listening on :{}", server_port);
 
-    warp::serve(routes.with(warp::log::custom(log::access)))
+    warp::serve(routes.with(warp::log::custom(access)))
         .run(([0, 0, 0, 0], server_port))
         .await;
 }
