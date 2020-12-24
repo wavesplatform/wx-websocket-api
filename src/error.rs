@@ -1,4 +1,4 @@
-use crate::messages::PreOutcomeMessage;
+use crate::updater::UpdateResource;
 use std::sync::mpsc::RecvError;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,8 +17,12 @@ pub enum Error {
     RunRedisError(#[from] bb8::RunError<bb8_redis::redis::RedisError>),
     #[error("RedisError: {0}")]
     RedisPool(#[from] redis::RedisError),
-    #[error("CrossbeamSendError: {0}")]
-    CrossbeamSendError(#[from] crossbeam::channel::SendError<PreOutcomeMessage>),
+    #[error("SendUpdateResourceError: {0}")]
+    SendUpdateResourceError(#[from] tokio::sync::mpsc::error::SendError<UpdateResource>),
+    #[error("SendMessageError: {0}")]
+    SendMessageError(
+        #[from] tokio::sync::mpsc::error::SendError<Result<warp::ws::Message, warp::Error>>,
+    ),
     #[error("InvalidUpdateResource: {0}")]
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]

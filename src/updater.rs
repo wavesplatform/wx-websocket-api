@@ -1,7 +1,5 @@
 use crate::error::Error;
-use crate::messages::PreOutcomeMessage;
 use crate::models::ConfigFile;
-use crate::{Connections, Subscribtions};
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
@@ -50,9 +48,8 @@ impl ToString for UpdateResource {
 // NB: redis server have to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
 pub async fn run(
-    connections: Connections,
-    subscriptions: Subscribtions,
     redis_client: redis::Client,
+    updates_chan: tokio::sync::mpsc::UnboundedSender<UpdateResource>,
 ) -> Result<(), Error> {
     let mut conn = redis_client.get_connection()?;
     let mut pubsub = conn.as_pubsub();
@@ -63,18 +60,7 @@ pub async fn run(
         let update: String = msg.get_payload::<String>()?;
 
         if let Ok(update) = UpdateResource::try_from(update.as_ref()) {
-            let subscription_key = String::from(&update);
-            let message = PreOutcomeMessage::Update(update);
-
-            for (&connection_id, tx) in connections.read().await.iter() {
-                if let Some(connection_subscriptions) =
-                    subscriptions.read().await.get(&connection_id)
-                {
-                    if connection_subscriptions.contains(&subscription_key) {
-                        if let Err(_disconnected) = tx.send(message.clone()) {}
-                    }
-                }
-            }
+            updates_chan.send(update)?;
         }
     }
 

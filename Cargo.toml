@@ -24,7 +24,6 @@ bb8 = "0.5.1"
 bb8-redis = "0.6"
 tracing = "0.1"
 tracing-subscriber = "0.2"
-crossbeam = "0.8"
 
 [[bin]]
 name = "service"
