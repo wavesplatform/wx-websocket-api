@@ -2,6 +2,7 @@ use crate::error::Error;
 use crate::models::ConfigFile;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+use wavesexchange_log::error;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,9 +48,9 @@ impl ToString for UpdateResource {
 
 // NB: redis server have to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
-pub async fn run(
+pub fn run(
     redis_client: redis::Client,
-    updates_chan: tokio::sync::mpsc::UnboundedSender<UpdateResource>,
+    updates_sender: tokio::sync::mpsc::UnboundedSender<UpdateResource>,
 ) -> Result<(), Error> {
     let mut conn = redis_client.get_connection()?;
     let mut pubsub = conn.as_pubsub();
@@ -59,8 +60,11 @@ pub async fn run(
     while let Ok(msg) = pubsub.get_message() {
         let update: String = msg.get_payload::<String>()?;
 
-        if let Ok(update) = UpdateResource::try_from(update.as_ref()) {
-            updates_chan.send(update)?;
+        if let Ok(update_resource) = UpdateResource::try_from(update.as_ref()) {
+            if let Err(err) = updates_sender.send(update_resource) {
+                error!("error occured while sending resource update: {:?}", err);
+                break;
+            }
         }
     }
 

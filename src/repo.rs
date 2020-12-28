@@ -1,4 +1,5 @@
-use crate::{error::Error, ConnectionId};
+use crate::error::Error;
+use crate::ClientId;
 use async_trait::async_trait;
 use bb8_redis::{bb8, redis::AsyncCommands, RedisConnectionManager};
 
@@ -14,7 +15,7 @@ pub struct Config {
 
 #[async_trait]
 pub trait Repo {
-    async fn get_connection_id(&self) -> Result<ConnectionId, Error>;
+    async fn get_connection_id(&self) -> Result<ClientId, Error>;
 
     // HEXISTS REDIS_SUBSCRIPTIONS_KEY <key>?
     // Y: HINCRBY REDIS_SUBSCRIPTIONS_KEY <key> 1

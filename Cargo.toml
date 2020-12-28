@@ -16,14 +16,12 @@ redis = "0.18.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "0.2", features = ["macros", "rt-core", "rt-threaded", "sync"] }
 warp = "0.2"
 wavesexchange_log = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_log/0.1.0" }
 wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.5.0" }
 bb8 = "0.5.1"
 bb8-redis = "0.6"
-tracing = "0.1"
-tracing-subscriber = "0.2"
 
 [[bin]]
 name = "service"

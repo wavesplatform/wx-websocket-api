@@ -1,6 +1,6 @@
 use crate::repo::Repo;
 use crate::websocket;
-use crate::Connections;
+use crate::Clients;
 use futures::future::FutureExt;
 use std::sync::Arc;
 use warp::Filter;
@@ -29,19 +29,19 @@ fn access(info: warp::log::Info) {
 pub async fn start<R: Repo + Sync + Send + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    connections: Connections,
+    clients: Clients,
 ) {
     let with_repo = warp::any().map(move || repo.clone());
-    let with_connections = warp::any().map(move || connections.clone());
+    let with_clients = warp::any().map(move || clients.clone());
 
     let routes = warp::path("ws")
         .and(warp::path::end())
         .and(warp::ws())
         .and(with_repo.clone())
-        .and(with_connections.clone())
-        .map(|ws: warp::ws::Ws, repo: Arc<R>, connections| {
+        .and(with_clients.clone())
+        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients| {
             ws.on_upgrade(move |socket| {
-                websocket::handle_connection(socket, connections, repo)
+                websocket::handle_connection(socket, clients, repo)
                     .map(|result| result.expect("Cannot handle ws connection"))
             })
         });
