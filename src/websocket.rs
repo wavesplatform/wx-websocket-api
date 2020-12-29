@@ -52,8 +52,8 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
             break;
         }
 
-        if let Err(_) = on_message(repo.clone(), &clients, &client_id, msg).await {
-            debug!("error occured while processing message");
+        if let Err(err) = on_message(repo.clone(), &clients, &client_id, msg).await {
+            error!("error occured while processing message: {:?}", err);
             break;
         }
     }
@@ -235,8 +235,7 @@ pub async fn updates_handler<R: Repo>(
     let mut updates_receiver = updates_receiver;
     while let Some(update) = updates_receiver.recv().await {
         let subscription_key = update.to_string();
-        println!("new update = {:?}", update);
-        println!("subscription_key = {:?}", subscription_key);
+
         let value = repo
             .get_by_key(subscription_key.as_ref())
             .await
@@ -247,7 +246,6 @@ pub async fn updates_handler<R: Repo>(
             value: value,
         });
 
-        println!("clients: {:?}", clients);
         for (_, client) in clients.read().await.iter() {
             if client.subscriptions.contains(&subscription_key) {
                 if let Err(err) = client.sender.send(Ok(reply.clone())) {
