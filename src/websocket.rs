@@ -17,22 +17,50 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
     let client_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
 
     let (ws_tx, mut ws_rx) = socket.split();
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (client_disconnect_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
+    let mut client_disconnect_rx = client_disconnect_tx.subscribe();
     // forward messages to ws connection
-    tokio::task::spawn(rx.forward(ws_tx).map(|result| {
-        if let Err(err) = result {
-            error!(
-                "error occurred while sending message to ws client: {:?}",
-                err
-            )
+    let _forwarder_handle = tokio::task::spawn(async move {
+        tokio::select! {
+            _ = client_rx.forward(ws_tx).map(|result| {
+                if let Err(err) = result {
+                    error!(
+                        "error occurred while sending message to ws client: {:?}",
+                        err
+                    )
+                }
+            }) => (),
+            _ = client_disconnect_rx.recv() => {
+                debug!("client was disconnected: stop the forwarder task");
+                ()
+            }
         }
-    }));
+    });
 
-    let tx = Arc::new(tx);
+    let client_tx2 = client_tx.clone();
+    let mut client_disconnect_rx = client_disconnect_tx.subscribe();
+    let _pinger_handle = tokio::task::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+
+                    client_tx2
+                        .send(Ok(ws::Message::from(OutcomeMessage::Ping)))
+                        .expect("error occured while sending message to client");
+                },
+                _ = client_disconnect_rx.recv() => {
+                    debug!("client was disconnected: stop the pinger task");
+                    break;
+                }
+            }
+        }
+    });
 
     let client = Client {
-        sender: tx,
+        sender: client_tx,
         subscriptions: HashSet::new(),
     };
 
@@ -48,10 +76,12 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
         };
 
         if msg.is_close() {
-            debug!("connection({}) was closed", client_id);
+            debug!("the client #{} connection was closed", client_id);
             break;
         }
 
+        // todo: do processing invalid messages without closing the connection
+        // but sending the error
         if let Err(err) = on_message(repo.clone(), &clients, &client_id, msg).await {
             error!("error occured while processing message: {:?}", err);
             break;
@@ -60,6 +90,10 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
 
     // handle closed connection
     on_disconnect(repo, &client_id, clients).await?;
+
+    client_disconnect_tx
+        .send(())
+        .expect("error occured while client disconnecting");
 
     Ok(())
 }
@@ -78,132 +112,45 @@ async fn on_message<R: Repo>(
         .expect(&format!("Unknown client_id: {}", client_id));
 
     match msg {
-        IncomeMessage::Ping => client
-            .sender
-            .send(Ok(ws::Message::from(OutcomeMessage::Pong)))
-            .map_err(|err| Error::from(err)),
+        IncomeMessage::Pong => todo!("update client alive status"),
         IncomeMessage::Subscribe(SubscribeMessage::Config {
-            options: config_options,
+            parameters: config_parameters,
         }) => {
-            if let Some(file) = &config_options.file {
-                let update_resource = UpdateResource::Config(file.to_owned());
-                let subscription_key = String::from(&update_resource);
+            let update_resource = UpdateResource::Config(config_parameters);
+            let subscription_key = String::from(&update_resource);
 
-                if !client.subscriptions.contains(&subscription_key) {
-                    repo.subscribe(subscription_key.clone()).await?;
+            if !client.subscriptions.contains(&subscription_key) {
+                repo.subscribe(subscription_key.clone()).await?;
 
-                    client.subscriptions.insert(subscription_key);
-
-                    client.sender.send(Ok(ws::Message::from(
-                        OutcomeMessage::SubscribeSuccess {
-                            resources: vec![update_resource],
-                        },
-                    )))?;
-                }
-
-                Ok(())
-            } else if let Some(files) = &config_options.files {
-                let update_resources: Vec<UpdateResource> = files
-                    .iter()
-                    .filter_map(|file| {
-                        let update_resource = UpdateResource::Config(file.to_owned());
-
-                        let subscription_key = String::from(&update_resource);
-
-                        if client.subscriptions.contains(&subscription_key) {
-                            None
-                        } else {
-                            Some(update_resource)
-                        }
-                    })
-                    .collect();
-
-                let fs = update_resources.clone().into_iter().map(|update_resource| {
-                    let subscription_key = update_resource.to_string();
-                    repo.subscribe(subscription_key.clone())
-                        .map(|res| res.map(|_| subscription_key))
-                });
-
-                let subscribe_result = futures::future::join_all(fs)
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<String>, Error>>()?;
-
-                subscribe_result.into_iter().for_each(|subscription_key| {
-                    client.subscriptions.insert(subscription_key);
-                });
+                client.subscriptions.insert(subscription_key);
 
                 client
                     .sender
                     .send(Ok(ws::Message::from(OutcomeMessage::SubscribeSuccess {
-                        resources: update_resources,
+                        resource: update_resource,
                     })))?;
-
-                Ok(())
-            } else {
-                Err(Error::InvalidSubscribeMessage)
             }
+
+            Ok(())
         }
         IncomeMessage::Unsubscribe(crate::messages::UnsubscribeMessage::Config {
-            options: config_options,
+            parameters: config_parameters,
         }) => {
-            if let Some(file) = &config_options.file {
-                let update_resource = UpdateResource::Config(file.to_owned());
-                let subscription_key = String::from(&update_resource);
+            let update_resource = UpdateResource::Config(config_parameters);
+            let subscription_key = String::from(&update_resource);
 
-                if client.subscriptions.contains(&subscription_key) {
-                    repo.unsubscribe(subscription_key.clone()).await?;
-                    client.subscriptions.remove(&subscription_key);
-                }
-
-                client
-                    .sender
-                    .send(Ok(ws::Message::from(OutcomeMessage::UnsubscribeSuccess {
-                        resources: vec![update_resource],
-                    })))?;
-
-                Ok(())
-            } else if let Some(files) = &config_options.files {
-                let update_resources: Vec<UpdateResource> = files
-                    .iter()
-                    .filter_map(|file| {
-                        let update_resource = UpdateResource::Config(file.to_owned());
-
-                        let subscription_key = String::from(&update_resource);
-
-                        if client.subscriptions.contains(&subscription_key) {
-                            Some(update_resource)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let fs = update_resources.clone().into_iter().map(|update_resource| {
-                    let subscription_key = update_resource.to_string();
-                    repo.unsubscribe(subscription_key.clone())
-                        .map(|res| res.map(|_| subscription_key))
-                });
-
-                let subscribe_result = futures::future::join_all(fs)
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<String>, Error>>()?;
-
-                subscribe_result.into_iter().for_each(|subscription_key| {
-                    client.subscriptions.remove(&subscription_key);
-                });
-
-                client
-                    .sender
-                    .send(Ok(ws::Message::from(OutcomeMessage::UnsubscribeSuccess {
-                        resources: update_resources,
-                    })))?;
-
-                Ok(())
-            } else {
-                Err(Error::InvalidUnsubscribeMessage)
+            if client.subscriptions.contains(&subscription_key) {
+                repo.unsubscribe(subscription_key.clone()).await?;
+                client.subscriptions.remove(&subscription_key);
             }
+
+            client
+                .sender
+                .send(Ok(ws::Message::from(OutcomeMessage::UnsubscribeSuccess {
+                    resource: update_resource,
+                })))?;
+
+            Ok(())
         }
     }
 }
@@ -249,7 +196,7 @@ pub async fn updates_handler<R: Repo>(
         for (_, client) in clients.read().await.iter() {
             if client.subscriptions.contains(&subscription_key) {
                 if let Err(err) = client.sender.send(Ok(reply.clone())) {
-                    println!("error occured while sending message: {:?}", err)
+                    debug!("error occured while sending message: {:?}", err)
                 }
             }
         }

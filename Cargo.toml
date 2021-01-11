@@ -22,6 +22,7 @@ wavesexchange_log = { git = "https://github.com/waves-exchange/wavesexchange-rs"
 wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.5.0" }
 bb8 = "0.5.1"
 bb8-redis = "0.6"
+url = "2.2.0"
 
 [[bin]]
 name = "service"

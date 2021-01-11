@@ -1,5 +1,4 @@
 use crate::updater::UpdateResource;
-use std::sync::mpsc::RecvError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -27,12 +26,10 @@ pub enum Error {
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]
     InvalidConfigPath(String),
-    #[error("RecvError: {0}")]
-    RecvError(#[from] RecvError),
     #[error("InvalidSubscribeMessage")]
     InvalidSubscribeMessage,
     #[error("InvalidUnsubscribeMessage")]
     InvalidUnsubscribeMessage,
-    #[error("UnknownConnectionId")]
-    UnknownConnectionId,
+    #[error("UrlParseError: {0}")]
+    UrlParseError(#[from] url::ParseError),
 }

@@ -1,4 +1,4 @@
-use crate::models::ConfigOptions;
+use crate::models::ConfigParameters;
 use crate::updater::UpdateResource;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
@@ -7,7 +7,7 @@ use warp::ws;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IncomeMessage {
-    Ping,
+    Pong,
     Subscribe(SubscribeMessage),
     Unsubscribe(UnsubscribeMessage),
 }
@@ -28,28 +28,28 @@ impl From<IncomeMessage> for ws::Message {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum SubscribeMessage {
-    Config { options: ConfigOptions },
+    Config { parameters: ConfigParameters },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum UnsubscribeMessage {
-    Config { options: ConfigOptions },
+    Config { parameters: ConfigParameters },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutcomeMessage {
-    Pong,
+    Ping,
     Update {
         resource: UpdateResource,
         value: String,
     },
     SubscribeSuccess {
-        resources: Vec<UpdateResource>,
+        resource: UpdateResource,
     },
     UnsubscribeSuccess {
-        resources: Vec<UpdateResource>,
+        resource: UpdateResource,
     },
 }
 

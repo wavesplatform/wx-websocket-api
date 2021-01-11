@@ -1,32 +1,30 @@
 use crate::error::Error;
-use crate::models::ConfigFile;
+use crate::models::ConfigParameters;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
+use url::Url;
 use wavesexchange_log::error;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateResource {
-    Config(ConfigFile),
+    Config(ConfigParameters),
 }
 
 impl TryFrom<&str> for UpdateResource {
     type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let parts: Vec<&str> = s.splitn(2, ":").collect();
-        if parts.len() < 2 {
-            return Err(Error::InvalidUpdateResource(s.to_owned()));
-        }
+        let url = Url::parse(s)?;
 
-        let resource = parts.first().unwrap().to_owned();
-        let metadata = parts.last().unwrap().to_owned();
-
-        match resource {
-            "config" => {
-                let config_file = ConfigFile::try_from(metadata)?;
-                Ok(UpdateResource::Config(config_file))
-            }
+        match url.scheme() {
+            "topic" => match url.host_str() {
+                Some("config") => {
+                    let config_parameters = ConfigParameters::try_from(url)?;
+                    Ok(UpdateResource::Config(config_parameters))
+                }
+                _ => Err(Error::InvalidUpdateResource(s.to_owned())),
+            },
             _ => Err(Error::InvalidUpdateResource(s.to_owned())),
         }
     }
@@ -34,8 +32,13 @@ impl TryFrom<&str> for UpdateResource {
 
 impl From<&UpdateResource> for String {
     fn from(um: &UpdateResource) -> Self {
+        let mut url = Url::parse("topic://").unwrap();
         match um {
-            UpdateResource::Config(cf) => format!("config:{}", String::from(cf)),
+            UpdateResource::Config(cp) => {
+                url.set_host(Some("config")).unwrap();
+                url.set_path(&cp.file.to_string());
+                url.as_str().to_owned()
+            }
         }
     }
 }
@@ -46,7 +49,7 @@ impl ToString for UpdateResource {
     }
 }
 
-// NB: redis server have to be configured to publish keyspace notifications:
+// NB: redis server has to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
 pub fn run(
     redis_client: redis::Client,

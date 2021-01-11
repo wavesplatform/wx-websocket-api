@@ -20,7 +20,7 @@ pub type ClientId = usize;
 
 #[derive(Clone, Debug)]
 pub struct Client {
-    sender: Arc<tokio::sync::mpsc::UnboundedSender<Result<warp::ws::Message, warp::Error>>>,
+    sender: tokio::sync::mpsc::UnboundedSender<Result<warp::ws::Message, warp::Error>>,
     subscriptions: HashSet<String>,
 }
 
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Error> {
 
     if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle) {
         let err = Error::from(e);
-        error!("subscriptions error: {}", err);
+        error!("{}", err);
         return Err(err);
     };
 
