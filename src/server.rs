@@ -6,22 +6,38 @@ use std::sync::Arc;
 use warp::Filter;
 use wavesexchange_log::info;
 
+pub struct ServerConfig {
+    pub port: u16,
+    pub client_ping_interval: Option<u64>,
+}
+
+pub struct ServerOptions {
+    pub client_ping_interval: Option<tokio::time::Duration>,
+}
+
 pub async fn start<R: Repo + Sync + Send + 'static>(
     server_port: u16,
     repo: Arc<R>,
     clients: Clients,
+    options: ServerOptions,
 ) {
     let with_repo = warp::any().map(move || repo.clone());
     let with_clients = warp::any().map(move || clients.clone());
+
+    let handle_connection_opts = websocket::HandleConnectionOptions {
+        ping_interval: options.client_ping_interval,
+    };
+    let with_opts = warp::any().map(move || handle_connection_opts.clone());
 
     let routes = warp::path("ws")
         .and(warp::path::end())
         .and(warp::ws())
         .and(with_repo.clone())
         .and(with_clients.clone())
-        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients| {
+        .and(with_opts.clone())
+        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients, opts| {
             ws.on_upgrade(move |socket| {
-                websocket::handle_connection(socket, clients, repo)
+                websocket::handle_connection(socket, clients, repo, opts)
                     .map(|result| result.expect("Cannot handle ws connection"))
             })
         });

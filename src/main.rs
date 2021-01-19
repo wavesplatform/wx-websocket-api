@@ -9,27 +9,29 @@ mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
+use messages::Topic;
 use repo::RepoImpl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use updater::UpdateResource;
 use wavesexchange_log::{error, info};
 
 pub type ClientId = usize;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Client {
     sender: tokio::sync::mpsc::UnboundedSender<Result<warp::ws::Message, warp::Error>>,
     subscriptions: HashSet<String>,
+    message_counter: i64,
+    pings: Vec<i64>,
 }
 
 pub type Clients = Arc<RwLock<HashMap<ClientId, Client>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let app_config = config::load_app()?;
     let repo_config = config::load_repo()?;
+    let server_config = config::load_server()?;
 
     let redis_connection_url = format!(
         "redis://{}:{}@{}:{}/",
@@ -43,8 +45,7 @@ async fn main() -> Result<(), Error> {
 
     let clients: Clients = Clients::default();
 
-    let (updates_sender, updates_receiver) =
-        tokio::sync::mpsc::unbounded_channel::<UpdateResource>();
+    let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel::<Topic>();
 
     let updates_handler_handle = tokio::task::spawn({
         info!("updates handler started");
@@ -57,7 +58,12 @@ async fn main() -> Result<(), Error> {
         updater::run(redis_conn, updates_sender)
     });
 
-    server::start(app_config.port, repo, clients).await;
+    let server_options = server::ServerOptions {
+        client_ping_interval: server_config
+            .client_ping_interval
+            .map(|interval_secs| tokio::time::Duration::from_secs(interval_secs)),
+    };
+    server::start(server_config.port, repo, clients, server_options).await;
 
     if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle) {
         let err = Error::from(e);

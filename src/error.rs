@@ -1,4 +1,4 @@
-use crate::updater::UpdateResource;
+use crate::messages::Topic;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -17,7 +17,7 @@ pub enum Error {
     #[error("RedisError: {0}")]
     RedisPool(#[from] redis::RedisError),
     #[error("SendUpdateResourceError: {0}")]
-    SendUpdateResourceError(#[from] tokio::sync::mpsc::error::SendError<UpdateResource>),
+    SendUpdateResourceError(#[from] tokio::sync::mpsc::error::SendError<Topic>),
     #[error("SendMessageError: {0}")]
     SendMessageError(
         #[from] tokio::sync::mpsc::error::SendError<Result<warp::ws::Message, warp::Error>>,
@@ -32,4 +32,10 @@ pub enum Error {
     InvalidUnsubscribeMessage,
     #[error("UrlParseError: {0}")]
     UrlParseError(#[from] url::ParseError),
+    #[error("InvalidPongMessage")]
+    InvalidPongMessage,
+    #[error("UnknownIncomeMessage: {0}")]
+    UnknownIncomeMessage(String),
+    #[error("InvalidTopic: {0}")]
+    InvalidTopic(String),
 }

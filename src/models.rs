@@ -5,7 +5,7 @@ use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigFile {
-    path: String,
+    pub path: String,
 }
 
 impl From<ConfigFile> for String {

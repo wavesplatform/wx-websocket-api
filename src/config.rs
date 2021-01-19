@@ -1,5 +1,6 @@
 use crate::error::Error;
 use crate::repo;
+use crate::server;
 use serde::Deserialize;
 
 fn default_port() -> u16 {
@@ -10,14 +11,11 @@ fn default_repo_port() -> u16 {
     6379
 }
 
-pub struct AppConfig {
-    pub port: u16,
-}
-
 #[derive(Deserialize)]
-struct FlatAppConfig {
+struct FlatServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
+    pub client_ping_interval_in_secs: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -42,10 +40,11 @@ pub fn load_repo() -> Result<repo::Config, Error> {
     })
 }
 
-pub fn load_app() -> Result<AppConfig, Error> {
-    let flat_config = envy::from_env::<FlatAppConfig>()?;
+pub fn load_server() -> Result<server::ServerConfig, Error> {
+    let flat_config = envy::from_env::<FlatServerConfig>()?;
 
-    Ok(AppConfig {
+    Ok(server::ServerConfig {
         port: flat_config.port,
+        client_ping_interval: flat_config.client_ping_interval_in_secs,
     })
 }
