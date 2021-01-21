@@ -1,5 +1,6 @@
 use crate::error::Error;
-use crate::messages::{IncomeMessage, OutcomeMessage, Topic};
+use crate::messages::{IncomeMessage, OutcomeMessage};
+use crate::models::Topic;
 use crate::repo::Repo;
 use crate::{Client, ClientId, Clients};
 use futures::{future::try_join_all, FutureExt, StreamExt};

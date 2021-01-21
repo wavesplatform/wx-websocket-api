@@ -1,9 +1,7 @@
-use crate::models::ConfigFile;
-use crate::{error::Error, models::ConfigParameters};
+use crate::error::Error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use url::Url;
 use warp::ws;
 
 type ErrorCode = u16;
@@ -36,44 +34,6 @@ impl From<IncomeMessage> for ws::Message {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PongMessage {
     pub message_number: i64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Topic {
-    Config(ConfigParameters),
-}
-
-impl TryFrom<&str> for Topic {
-    type Error = Error;
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let url = Url::parse(s)?;
-
-        match url.scheme() {
-            "topic" => match url.host_str() {
-                Some("config") => {
-                    let config_file = ConfigFile::try_from(url)?;
-                    Ok(Topic::Config(ConfigParameters { file: config_file }))
-                }
-                _ => Err(Error::InvalidTopic(s.to_owned())),
-            },
-            _ => Err(Error::InvalidTopic(s.to_owned())),
-        }
-    }
-}
-
-impl ToString for Topic {
-    fn to_string(&self) -> String {
-        let mut url = Url::parse("topic://").unwrap();
-        match self {
-            Topic::Config(cf) => {
-                url.set_host(Some("config")).unwrap();
-                url.set_path(&cf.file.path);
-                url.as_str().to_owned()
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

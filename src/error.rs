@@ -1,4 +1,4 @@
-use crate::messages::Topic;
+use crate::models::Topic;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

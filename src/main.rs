@@ -9,7 +9,7 @@ mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
-use messages::Topic;
+use models::Topic;
 use repo::RepoImpl;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

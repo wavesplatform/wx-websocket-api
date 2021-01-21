@@ -1,50 +1,6 @@
-use crate::{error::Error, messages::Topic};
+use crate::{error::Error, models::Topic};
 use std::convert::TryFrom;
 use wavesexchange_log::error;
-
-// #[derive(Clone, Debug, Serialize, Deserialize)]
-// #[serde(rename_all = "snake_case")]
-// pub enum UpdateResource {
-//     Config(ConfigParameters),
-// }
-
-// impl TryFrom<&str> for UpdateResource {
-//     type Error = Error;
-
-//     fn try_from(s: &str) -> Result<Self, Self::Error> {
-//         let url = Url::parse(s)?;
-
-//         match url.scheme() {
-//             "topic" => match url.host_str() {
-//                 Some("config") => {
-//                     let config_parameters = ConfigParameters::try_from(url)?;
-//                     Ok(UpdateResource::Config(config_parameters))
-//                 }
-//                 _ => Err(Error::InvalidUpdateResource(s.to_owned())),
-//             },
-//             _ => Err(Error::InvalidUpdateResource(s.to_owned())),
-//         }
-//     }
-// }
-
-// impl From<&UpdateResource> for String {
-//     fn from(um: &UpdateResource) -> Self {
-//         let mut url = Url::parse("topic://").unwrap();
-//         match um {
-//             UpdateResource::Config(cp) => {
-//                 url.set_host(Some("config")).unwrap();
-//                 url.set_path(&cp.file.to_string());
-//                 url.as_str().to_owned()
-//             }
-//         }
-//     }
-// }
-
-// impl ToString for UpdateResource {
-//     fn to_string(&self) -> String {
-//         self.into()
-//     }
-// }
 
 // NB: redis server has to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
