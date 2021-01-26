@@ -15,11 +15,14 @@ impl TryFrom<&str> for Topic {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let url = Url::parse(s)?;
 
-        match url.host_str() {
-            Some("config") => {
-                let config_file = ConfigFile::try_from(url)?;
-                Ok(Topic::Config(ConfigParameters { file: config_file }))
-            }
+        match url.scheme() {
+            "topic" => match url.host_str() {
+                Some("config") => {
+                    let config_file = ConfigFile::try_from(url)?;
+                    Ok(Topic::Config(ConfigParameters { file: config_file }))
+                }
+                _ => Err(Error::InvalidTopic(s.to_owned())),
+            },
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
     }
@@ -27,9 +30,10 @@ impl TryFrom<&str> for Topic {
 
 impl ToString for Topic {
     fn to_string(&self) -> String {
+        let mut url = Url::parse("topic://").unwrap();
         match self {
             Topic::Config(cf) => {
-                let mut url = Url::parse("config").unwrap();
+                url.set_host(Some("config")).unwrap();
                 url.set_path(&cf.file.path);
                 url.as_str().to_owned()
             }
