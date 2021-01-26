@@ -59,9 +59,8 @@ async fn main() -> Result<(), Error> {
     });
 
     let server_options = server::ServerOptions {
-        client_ping_interval: server_config
-            .client_ping_interval
-            .map(|interval_secs| tokio::time::Duration::from_secs(interval_secs)),
+        client_ping_interval: tokio::time::Duration::from_secs(server_config.client_ping_interval),
+        client_ping_failures_threshold: server_config.client_ping_failures_threshold,
     };
     server::start(server_config.port, repo, clients, server_options).await;
 

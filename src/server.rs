@@ -8,11 +8,14 @@ use wavesexchange_log::info;
 
 pub struct ServerConfig {
     pub port: u16,
-    pub client_ping_interval: Option<u64>,
+    pub client_ping_interval: u64,
+    pub client_ping_failures_threshold: u16,
+
 }
 
 pub struct ServerOptions {
-    pub client_ping_interval: Option<tokio::time::Duration>,
+    pub client_ping_interval: tokio::time::Duration,
+    pub client_ping_failures_threshold: u16,
 }
 
 pub async fn start<R: Repo + Sync + Send + 'static>(
@@ -26,6 +29,7 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
 
     let handle_connection_opts = websocket::HandleConnectionOptions {
         ping_interval: options.client_ping_interval,
+        ping_failures_threshold: options.client_ping_failures_threshold,
     };
     let with_opts = warp::any().map(move || handle_connection_opts.clone());
 

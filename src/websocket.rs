@@ -13,7 +13,8 @@ use wavesexchange_log::{debug, error};
 
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
-    pub ping_interval: Option<tokio::time::Duration>,
+    pub ping_interval: tokio::time::Duration,
+    pub ping_failures_threshold: u16,
 }
 
 pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
@@ -56,9 +57,6 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
         }
     });
 
-    let ping_interval = options
-        .ping_interval
-        .unwrap_or(tokio::time::Duration::from_secs(30));
     let pinger_failure_signal_sender = client_disconnect_signal_sender.clone();
     let mut pinger_failure_signal_receiver = pinger_failure_signal_sender.subscribe();
     {
@@ -68,7 +66,7 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
         let mut client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
         // pinging
         tokio::task::spawn(async move {
-            let mut interval = tokio::time::interval(ping_interval);
+            let mut interval = tokio::time::interval(options.ping_interval);
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
@@ -77,8 +75,8 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
                             .get_mut(&client_id)
                             .expect(&format!("Unknown client_id: {}", client_id));
 
-                        if client.pings.len() >= 3 {
-                            debug!("client did not answer for 3 consequent ping messages");
+                        if client.pings.len() >= options.ping_failures_threshold as usize {
+                            debug!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
 
                             pinger_failure_signal_sender.send(())
                                 .expect("error occured while client disconnecting, because of ping failure");
@@ -191,24 +189,21 @@ async fn on_message<R: Repo>(
         IncomeMessage::Subscribe {
             topic: subscription_key,
         } => {
-            let topic = Topic::try_from(subscription_key.as_str())?;
+            // just for subscription key validation
+            let _topic = Topic::try_from(subscription_key.as_str())?;
 
-            match topic {
-                Topic::Config(_config_parameters) => {
-                    if !client.subscriptions.contains(&subscription_key) {
-                        repo.subscribe(subscription_key.clone()).await?;
+            if !client.subscriptions.contains(&subscription_key) {
+                repo.subscribe(subscription_key.clone()).await?;
 
-                        client.subscriptions.insert(subscription_key.clone());
-                        client.message_counter += 1;
+                client.subscriptions.insert(subscription_key.clone());
+                client.message_counter += 1;
 
-                        client
-                            .sender
-                            .send(Ok(ws::Message::from(OutcomeMessage::Subscribed {
-                                message_number: client.message_counter,
-                                topic: subscription_key,
-                            })))?;
-                    }
-                }
+                client
+                    .sender
+                    .send(Ok(ws::Message::from(OutcomeMessage::Subscribed {
+                        message_number: client.message_counter,
+                        topic: subscription_key,
+                    })))?;
             }
 
             Ok(())
@@ -216,25 +211,22 @@ async fn on_message<R: Repo>(
         IncomeMessage::Unsubscribe {
             topic: subscription_key,
         } => {
-            let topic = Topic::try_from(subscription_key.as_str())?;
+            // just for subscription key validation
+            let _topic = Topic::try_from(subscription_key.as_str())?;
 
-            match topic {
-                Topic::Config(_config_parameters) => {
-                    if client.subscriptions.contains(&subscription_key) {
-                        repo.unsubscribe(subscription_key.clone()).await?;
-                        client.subscriptions.remove(&subscription_key);
-                    }
-
-                    client.message_counter += 1;
-
-                    client
-                        .sender
-                        .send(Ok(ws::Message::from(OutcomeMessage::Unsubscribed {
-                            message_number: client.message_counter,
-                            topic: subscription_key,
-                        })))?;
-                }
+            if client.subscriptions.contains(&subscription_key) {
+                repo.unsubscribe(subscription_key.clone()).await?;
+                client.subscriptions.remove(&subscription_key);
             }
+
+            client.message_counter += 1;
+
+            client
+                .sender
+                .send(Ok(ws::Message::from(OutcomeMessage::Unsubscribed {
+                    message_number: client.message_counter,
+                    topic: subscription_key,
+                })))?;
 
             Ok(())
         }

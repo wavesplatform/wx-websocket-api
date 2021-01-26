@@ -11,11 +11,22 @@ fn default_repo_port() -> u16 {
     6379
 }
 
+fn default_client_ping_interval_in_secs() -> u64 {
+    30
+}
+
+fn default_client_ping_failures_threshold() -> u16 {
+    3
+}
+
 #[derive(Deserialize)]
 struct FlatServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
-    pub client_ping_interval_in_secs: Option<u64>,
+    #[serde(default = "default_client_ping_interval_in_secs")]
+    pub client_ping_interval_in_secs: u64,
+    #[serde(default = "default_client_ping_failures_threshold")]
+    pub client_ping_failures_threshold: u16,
 }
 
 #[derive(Deserialize)]
@@ -46,5 +57,6 @@ pub fn load_server() -> Result<server::ServerConfig, Error> {
     Ok(server::ServerConfig {
         port: flat_config.port,
         client_ping_interval: flat_config.client_ping_interval_in_secs,
+        client_ping_failures_threshold: flat_config.client_ping_failures_threshold,
     })
 }
