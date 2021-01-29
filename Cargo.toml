@@ -1,6 +1,6 @@
 [package]
 name = "websocket-service"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Аleksej Petrov <apetrov@wavesplatform.com>"]
 edition = "2018"
 
