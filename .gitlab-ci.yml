@@ -1,0 +1,14 @@
+include:
+  - project: 'we-private/backend/common-ci'
+    ref: master
+    file: 'ci-functions/build_image.yml'
+  - project: 'we-private/backend/common-ci'
+    ref: master
+    file: 'ci-functions/deploy_stages.yml'
+
+variables:
+  APP_NAME: wx-websocket-api
+
+stages:
+  - "Build docker image"
+  - "Deploy to stage/test/dev"
