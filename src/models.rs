@@ -7,6 +7,7 @@ use url::Url;
 #[serde(rename_all = "snake_case")]
 pub enum Topic {
     Config(ConfigParameters),
+    TestResource(TestResource),
 }
 
 impl TryFrom<&str> for Topic {
@@ -20,6 +21,10 @@ impl TryFrom<&str> for Topic {
                 Some("config") => {
                     let config_file = ConfigFile::try_from(url)?;
                     Ok(Topic::Config(ConfigParameters { file: config_file }))
+                }
+                Some("test.resource") => {
+                    let ps = TestResource::try_from(&url)?;
+                    Ok(Topic::TestResource(ps))
                 }
                 _ => Err(Error::InvalidTopic(s.to_owned())),
             },
@@ -35,6 +40,14 @@ impl ToString for Topic {
             Topic::Config(cf) => {
                 url.set_host(Some("config")).unwrap();
                 url.set_path(&cf.file.path);
+                url.as_str().to_owned()
+            }
+            Topic::TestResource(ps) => {
+                url.set_host(Some("test.resource")).unwrap();
+                url.set_path(&ps.path);
+                if let Some(query) = ps.query.clone() {
+                    url.set_query(Some(query.as_str()));
+                }
                 url.as_str().to_owned()
             }
         }
@@ -97,5 +110,32 @@ impl TryFrom<Url> for ConfigParameters {
     fn try_from(value: Url) -> Result<Self, Self::Error> {
         let config_file = ConfigFile::try_from(value)?;
         Ok(Self { file: config_file })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct TestResource {
+    pub path: String,
+    pub query: Option<String>,
+}
+
+impl ToString for TestResource {
+    fn to_string(&self) -> String {
+        let mut s = self.path.clone();
+        if let Some(query) = self.query.clone() {
+            s = format!("{}?{}", s, query).to_string();
+        }
+        s
+    }
+}
+
+impl TryFrom<&url::Url> for TestResource {
+    type Error = Error;
+
+    fn try_from(u: &url::Url) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: u.path().to_string(),
+            query: u.query().map(|q| q.to_owned()),
+        })
     }
 }
