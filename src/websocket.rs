@@ -202,8 +202,19 @@ async fn on_message<R: Repo>(
                     .sender
                     .send(Ok(ws::Message::from(OutcomeMessage::Subscribed {
                         message_number: client.message_counter,
-                        topic: subscription_key,
+                        topic: subscription_key.clone(),
                     })))?;
+
+                if let Ok(value) = repo.get_by_key(&subscription_key).await {
+                    client.message_counter += 1;
+                    client
+                        .sender
+                        .send(Ok(ws::Message::from(OutcomeMessage::Update{
+                            message_number: client.message_counter,
+                            topic: subscription_key,
+                            value,
+                        })))?;
+                }
             }
 
             Ok(())

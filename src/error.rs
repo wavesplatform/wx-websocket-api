@@ -26,6 +26,8 @@ pub enum Error {
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]
     InvalidConfigPath(String),
+    #[error("InvalidStatePath: {0}")]
+    InvalidStatePath(String),
     #[error("InvalidSubscribeMessage")]
     InvalidSubscribeMessage,
     #[error("InvalidUnsubscribeMessage")]
