@@ -9,6 +9,7 @@ mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
+use messages::OutcomeMessage;
 use models::Topic;
 use repo::RepoImpl;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +25,14 @@ pub struct Client {
     subscriptions: HashSet<String>,
     message_counter: i64,
     pings: Vec<i64>,
+}
+
+impl Client {
+    fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
+        self.message_counter += 1;
+        self.sender.send(Ok(warp::ws::Message::from(message)))?;
+        Ok(())
+    }
 }
 
 pub type Clients = Arc<RwLock<HashMap<ClientId, Client>>>;
