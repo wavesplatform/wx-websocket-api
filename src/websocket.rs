@@ -122,6 +122,7 @@ async fn pinging(
                         .expect("error occured while client disconnecting, because of ping failure");
                     break;
                 } else {
+                    client.pings.push(client.message_counter);
                     let message = OutcomeMessage::Ping { message_number: client.message_counter };
                     client.send(message).expect("error occured while sending message to client");
                 }
