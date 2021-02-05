@@ -10,7 +10,6 @@ pub struct ServerConfig {
     pub port: u16,
     pub client_ping_interval: u64,
     pub client_ping_failures_threshold: u16,
-
 }
 
 pub struct ServerOptions {

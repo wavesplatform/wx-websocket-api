@@ -8,6 +8,7 @@ use url::Url;
 pub enum Topic {
     Config(ConfigParameters),
     State(State),
+    TestResource(TestResource),
 }
 
 impl TryFrom<&str> for Topic {
@@ -16,18 +17,19 @@ impl TryFrom<&str> for Topic {
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let url = Url::parse(s)?;
 
-        match url.scheme() {
-            "topic" => match url.host_str() {
-                Some("config") => {
-                    let config_file = ConfigFile::try_from(url)?;
-                    Ok(Topic::Config(ConfigParameters { file: config_file }))
-                }
-                Some("state") => {
-                    let state = State::try_from(url)?;
-                    Ok(Topic::State(state))
-                }
-                _ => Err(Error::InvalidTopic(s.to_owned())),
-            },
+        match url.host_str() {
+            Some("config") => {
+                let config_file = ConfigFile::try_from(url)?;
+                Ok(Topic::Config(ConfigParameters { file: config_file }))
+            }
+            Some("state") => {
+                let state = State::try_from(url)?;
+                Ok(Topic::State(state))
+            }
+            Some("test.resource") => {
+                let ps = TestResource::try_from(url)?;
+                Ok(Topic::TestResource(ps))
+            }
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
     }
@@ -46,6 +48,14 @@ impl ToString for Topic {
                 url.set_host(Some("state")).unwrap();
                 let path = state.to_string();
                 url.set_path(&path);
+                url.as_str().to_owned()
+            }
+            Topic::TestResource(ps) => {
+                url.set_host(Some("test.resource")).unwrap();
+                url.set_path(&ps.path);
+                if let Some(query) = ps.query.clone() {
+                    url.set_query(Some(query.as_str()));
+                }
                 url.as_str().to_owned()
             }
         }
@@ -159,5 +169,32 @@ fn topic_state_test() {
     assert_eq!(state.address, "some_address".to_string());
     assert_eq!(state.key, "some_key".to_string());
     let state_string = state.to_string();
-    assert_eq!("some_address:some_key".to_string(), state_string);
+    assert_eq!("some_address/some_key".to_string(), state_string);
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct TestResource {
+    pub path: String,
+    pub query: Option<String>,
+}
+
+impl ToString for TestResource {
+    fn to_string(&self) -> String {
+        let mut s = self.path.clone();
+        if let Some(query) = self.query.clone() {
+            s = format!("{}?{}", s, query).to_string();
+        }
+        s
+    }
+}
+
+impl TryFrom<Url> for TestResource {
+    type Error = Error;
+
+    fn try_from(u: Url) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: u.path().to_string(),
+            query: u.query().map(|q| q.to_owned()),
+        })
+    }
 }

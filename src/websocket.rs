@@ -209,7 +209,7 @@ async fn on_message<R: Repo>(
                     client.message_counter += 1;
                     client
                         .sender
-                        .send(Ok(ws::Message::from(OutcomeMessage::Update{
+                        .send(Ok(ws::Message::from(OutcomeMessage::Update {
                             message_number: client.message_counter,
                             topic: subscription_key,
                             value,
