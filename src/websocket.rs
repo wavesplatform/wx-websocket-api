@@ -11,6 +11,9 @@ use tokio::sync::broadcast::Sender;
 use warp::ws;
 use wavesexchange_log::{debug, error};
 
+const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
+const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
+
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
     pub ping_interval: tokio::time::Duration,
@@ -131,7 +134,7 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
                                 let mut error_details = std::collections::HashMap::new();
                                 error_details.insert("reason".to_string(), error_message);
                                 client.sender
-                                    .send(Ok(ws::Message::from(OutcomeMessage::Error { message_number: client.message_counter, code: 1, message: "Invalid message".to_string(), details: error_details })))
+                                    .send(Ok(ws::Message::from(OutcomeMessage::Error { message_number: client.message_counter, code: INVALID_MESSAGE_ERROR_CODE, message: "Invalid message".to_string(), details: Some(error_details) })))
                                     .expect("error occured while sending message to client");
                             },
                             _ => {
@@ -192,7 +195,18 @@ async fn on_message<R: Repo>(
             // just for subscription key validation
             let _topic = Topic::try_from(subscription_key.as_str())?;
 
-            if !client.subscriptions.contains(&subscription_key) {
+            if client.subscriptions.contains(&subscription_key) {
+                client.message_counter += 1;
+
+                client
+                    .sender
+                    .send(Ok(ws::Message::from(OutcomeMessage::Error {
+                        code: ALREADY_SUBSCRIBED_ERROR_CODE,
+                        message: "You are already subscribed for the specified topic".to_string(),
+                        details: None,
+                        message_number: client.message_counter,
+                    })))?;
+            } else {
                 repo.subscribe(subscription_key.clone()).await?;
 
                 client.subscriptions.insert(subscription_key.clone());

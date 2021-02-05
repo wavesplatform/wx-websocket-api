@@ -14,12 +14,12 @@ pub fn run(
     pubsub.psubscribe("__keyevent*__:*")?;
 
     while let Ok(msg) = pubsub.get_message() {
-        let update: String = msg.get_payload::<String>()?;
-
-        if let Ok(topic) = Topic::try_from(update.as_ref()) {
-            if let Err(err) = updates_sender.send(topic) {
-                error!("error occured while sending resource update: {:?}", err);
-                break;
+        if let Ok(update) = msg.get_payload::<String>() {
+            if let Ok(topic) = Topic::try_from(update.as_ref()) {
+                if let Err(err) = updates_sender.send(topic) {
+                    error!("error occured while sending resource update: {:?}", err);
+                    break;
+                }
             }
         }
     }

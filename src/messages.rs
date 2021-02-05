@@ -59,7 +59,7 @@ pub enum OutcomeMessage {
         message_number: i64,
         code: ErrorCode,
         message: String,
-        details: HashMap<String, String>,
+        details: Option<HashMap<String, String>>,
     },
 }
 
