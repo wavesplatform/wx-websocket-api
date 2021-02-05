@@ -7,6 +7,7 @@ use url::Url;
 #[serde(rename_all = "snake_case")]
 pub enum Topic {
     Config(ConfigParameters),
+    State(State),
 }
 
 impl TryFrom<&str> for Topic {
@@ -20,6 +21,10 @@ impl TryFrom<&str> for Topic {
                 Some("config") => {
                     let config_file = ConfigFile::try_from(url)?;
                     Ok(Topic::Config(ConfigParameters { file: config_file }))
+                }
+                Some("state") => {
+                    let state = State::try_from(url)?;
+                    Ok(Topic::State(state))
                 }
                 _ => Err(Error::InvalidTopic(s.to_owned())),
             },
@@ -35,6 +40,12 @@ impl ToString for Topic {
             Topic::Config(cf) => {
                 url.set_host(Some("config")).unwrap();
                 url.set_path(&cf.file.path);
+                url.as_str().to_owned()
+            }
+            Topic::State(state) => {
+                url.set_host(Some("state")).unwrap();
+                let path = state.to_string();
+                url.set_path(&path);
                 url.as_str().to_owned()
             }
         }
@@ -98,4 +109,55 @@ impl TryFrom<Url> for ConfigParameters {
         let config_file = ConfigFile::try_from(value)?;
         Ok(Self { file: config_file })
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct State {
+    pub address: String,
+    pub key: String,
+}
+
+impl From<&State> for String {
+    fn from(s: &State) -> Self {
+        format!("{}/{}", s.address.clone(), s.key.clone())
+    }
+}
+
+impl ToString for State {
+    fn to_string(&self) -> String {
+        self.into()
+    }
+}
+
+impl TryFrom<Url> for State {
+    type Error = Error;
+
+    fn try_from(value: Url) -> Result<Self, Self::Error> {
+        let params = value
+            .path_segments()
+            .ok_or_else(|| Error::InvalidStatePath(value.path().to_string()))?
+            .take(2)
+            .collect::<Vec<_>>();
+        if params.len() == 2 {
+            let address = params[0].to_string();
+            let key = params[1].to_string();
+            Ok(Self { address, key })
+        } else {
+            Err(Error::InvalidStatePath(value.path().to_string()))
+        }
+    }
+}
+
+#[test]
+fn topic_state_test() {
+    let url = Url::parse("topic://state/some_address/some_key").unwrap();
+    let state = State::try_from(url).unwrap();
+    assert_eq!(state.address, "some_address".to_string());
+    assert_eq!(state.key, "some_key".to_string());
+    let url = Url::parse("topic://state/some_address/some_key/some_other_part_of_path").unwrap();
+    let state = State::try_from(url).unwrap();
+    assert_eq!(state.address, "some_address".to_string());
+    assert_eq!(state.key, "some_key".to_string());
+    let state_string = state.to_string();
+    assert_eq!("some_address:some_key".to_string(), state_string);
 }
