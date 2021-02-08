@@ -238,7 +238,7 @@ async fn on_message<R: Repo>(
                 };
                 client.send(message)?;
 
-                if let Ok(value) = repo.get_by_key(&subscription_key).await {
+                if let Some(value) = repo.get_by_key(&subscription_key).await? {
                     let message = OutcomeMessage::Update {
                         message_number: client.message_counter,
                         topic: subscription_key,
@@ -336,21 +336,22 @@ pub async fn updates_handler<R: Repo>(
     while let Some(topic) = updates_receiver.recv().await {
         let topic_encoded = topic.to_string();
 
-        let value = repo
+        if let Some(value) = repo
             .get_by_key(topic_encoded.as_ref())
             .await
-            .expect(&format!("Cannot get value by key {}", topic_encoded));
-
-        for (_, client) in clients.write().await.iter_mut() {
-            let subscribtion_key = topic_encoded.clone();
-            if client.subscriptions.contains(&subscribtion_key) {
-                let message = OutcomeMessage::Update {
-                    message_number: client.message_counter,
-                    topic: subscribtion_key,
-                    value: value.clone(),
-                };
-                if let Err(err) = client.send(message) {
-                    debug!("error occured while sending message: {:?}", err)
+            .expect(&format!("Cannot get value by key {}", topic_encoded))
+        {
+            for (_, client) in clients.write().await.iter_mut() {
+                let subscribtion_key = topic_encoded.clone();
+                if client.subscriptions.contains(&subscribtion_key) {
+                    let message = OutcomeMessage::Update {
+                        message_number: client.message_counter,
+                        topic: subscribtion_key,
+                        value: value.clone(),
+                    };
+                    if let Err(err) = client.send(message) {
+                        debug!("error occured while sending message: {:?}", err)
+                    }
                 }
             }
         }

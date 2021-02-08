@@ -26,7 +26,7 @@ pub trait Repo {
     async fn unsubscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error>;
 
     // GET <key>
-    async fn get_by_key(&self, key: &str) -> Result<String, Error>;
+    async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error>;
 }
 
 pub struct RepoImpl {
@@ -84,7 +84,7 @@ impl Repo for RepoImpl {
             .map_err(|e| Error::from(e))
     }
 
-    async fn get_by_key(&self, key: &str) -> Result<String, Error> {
+    async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error> {
         let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
 
         con.get(key).await.map_err(|e| Error::from(e))
