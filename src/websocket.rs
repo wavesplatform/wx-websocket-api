@@ -41,8 +41,8 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
 
     clients.write().await.insert(client_id, client);
 
-    let (client_disconnect_signal_sender, _) = tokio::sync::broadcast::channel::<()>(1);
-    let mut client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
+    let (client_disconnect_signal_sender, mut client_disconnect_signal_receiver) =
+        tokio::sync::broadcast::channel::<()>(1);
     // forward messages to ws connection
     tokio::task::spawn(async move {
         tokio::select! {
@@ -62,7 +62,6 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
     });
 
     let pinger_failure_signal_sender = client_disconnect_signal_sender.clone();
-    let pinger_failure_signal_receiver = pinger_failure_signal_sender.subscribe();
     {
         let clients = clients.clone();
         let client_id = client_id.clone();
@@ -88,8 +87,6 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
         client_id,
         repo.clone(),
         client_disconnect_signal_receiver,
-        client_disconnect_signal_sender.clone(),
-        pinger_failure_signal_receiver,
     )
     .await;
 
@@ -141,8 +138,6 @@ async fn messages_processing<R: Repo + Sync + Send + 'static>(
     client_id: ClientId,
     repo: Arc<R>,
     mut client_disconnect_signal_receiver: Receiver<()>,
-    client_disconnect_signal_sender: Sender<()>,
-    mut pinger_failure_signal_receiver: Receiver<()>,
 ) {
     loop {
         tokio::select! {
@@ -177,13 +172,6 @@ async fn messages_processing<R: Repo + Sync + Send + 'static>(
             },
             _ = client_disconnect_signal_receiver.recv() => {
                 debug!("got the client disconnect signal: stop the messages processing");
-                break;
-            }
-            _ = pinger_failure_signal_receiver.recv() => {
-                debug!("got the ping failure signal: stop the messages processing");
-                client_disconnect_signal_sender
-                    .send(())
-                    .expect("error occured while sending ping failure signal");
                 break;
             }
 
@@ -320,9 +308,7 @@ async fn on_disconnect<R: Repo>(
 
     clients.write().await.remove(client_id);
 
-    client_disconnect_signal_sender
-        .send(())
-        .expect("error occured while client disconnecting");
+    let _ = client_disconnect_signal_sender.send(());
 
     Ok(())
 }
