@@ -10,16 +10,27 @@ pub fn run(
 ) -> Result<(), Error> {
     let mut conn = redis_client.get_connection()?;
     let mut pubsub = conn.as_pubsub();
+    pubsub.set_read_timeout(Some(std::time::Duration::from_secs(240)))?;
 
-    pubsub.psubscribe("__keyevent*__:*")?;
-
-    while let Ok(msg) = pubsub.get_message() {
-        if let Ok(update) = msg.get_payload::<String>() {
-            if let Ok(topic) = Topic::try_from(update.as_ref()) {
-                if let Err(err) = updates_sender.send(topic) {
-                    error!("error occured while sending resource update: {:?}", err);
-                    break;
+    loop {
+        pubsub.psubscribe("__keyevent*__:*")?;
+        match pubsub.get_message() {
+            Ok(msg) => {
+                if let Ok(update) = msg.get_payload::<String>() {
+                    if let Ok(topic) = Topic::try_from(update.as_ref()) {
+                        if let Err(err) = updates_sender.send(topic) {
+                            error!("error occured while sending resource update: {:?}", err);
+                            break;
+                        }
+                    }
                 }
+            }
+            Err(error) => {
+                // error when socket don't response in time
+                if error.to_string().contains("os error 11") {
+                    continue;
+                }
+                return Err(error.into());
             }
         }
     }
