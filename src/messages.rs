@@ -50,6 +50,7 @@ pub enum OutcomeMessage {
     Subscribed {
         message_number: i64,
         topic: String,
+        value: String,
     },
     Unsubscribed {
         message_number: i64,

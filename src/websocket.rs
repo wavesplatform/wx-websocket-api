@@ -35,6 +35,7 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
     let client = Client {
         sender: client_tx.clone(),
         subscriptions: HashSet::new(),
+        new_subscriptions: HashSet::new(),
         message_counter: 1,
         pings: vec![],
     };
@@ -218,21 +219,16 @@ async fn on_message<R: Repo>(
                 client.send(message)?;
             } else {
                 repo.subscribe(subscription_key.clone()).await?;
-
                 client.subscriptions.insert(subscription_key.clone());
-                let message = OutcomeMessage::Subscribed {
-                    message_number: client.message_counter,
-                    topic: subscription_key.clone(),
-                };
-                client.send(message)?;
-
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                    let message = OutcomeMessage::Update {
+                    let message = OutcomeMessage::Subscribed {
                         message_number: client.message_counter,
                         topic: subscription_key,
                         value,
                     };
                     client.send(message)?;
+                } else {
+                    client.new_subscriptions.insert(subscription_key);
                 }
             }
 
@@ -328,12 +324,20 @@ pub async fn updates_handler<R: Repo>(
             .expect(&format!("Cannot get value by key {}", topic_encoded))
         {
             for (_, client) in clients.write().await.iter_mut() {
-                let subscribtion_key = topic_encoded.clone();
-                if client.subscriptions.contains(&subscribtion_key) {
-                    let message = OutcomeMessage::Update {
-                        message_number: client.message_counter,
-                        topic: subscribtion_key,
-                        value: value.clone(),
+                let subscription_key = topic_encoded.clone();
+                if client.subscriptions.contains(&subscription_key) {
+                    let message = if client.new_subscriptions.remove(&subscription_key) {
+                        OutcomeMessage::Subscribed {
+                            message_number: client.message_counter,
+                            topic: subscription_key,
+                            value: value.clone(),
+                        }
+                    } else {
+                        OutcomeMessage::Update {
+                            message_number: client.message_counter,
+                            topic: subscription_key,
+                            value: value.clone(),
+                        }
                     };
                     if let Err(err) = client.send(message) {
                         debug!("error occured while sending message: {:?}", err)

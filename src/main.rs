@@ -25,6 +25,7 @@ pub struct Client {
     subscriptions: HashSet<String>,
     message_counter: i64,
     pings: Vec<i64>,
+    new_subscriptions: HashSet<String>,
 }
 
 impl Client {
