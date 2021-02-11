@@ -8,29 +8,30 @@ pub fn run(
     redis_client: redis::Client,
     updates_sender: tokio::sync::mpsc::UnboundedSender<Topic>,
 ) -> Result<(), Error> {
-    let mut conn = redis_client.get_connection()?;
-    let mut pubsub = conn.as_pubsub();
-    pubsub.set_read_timeout(Some(std::time::Duration::from_secs(240)))?;
-
-    loop {
+    'base: loop {
+        let mut conn = redis_client.get_connection()?;
+        let mut pubsub = conn.as_pubsub();
+        pubsub.set_read_timeout(Some(std::time::Duration::from_secs(240)))?;
         pubsub.psubscribe("__keyevent*__:*")?;
-        match pubsub.get_message() {
-            Ok(msg) => {
-                if let Ok(update) = msg.get_payload::<String>() {
-                    if let Ok(topic) = Topic::try_from(update.as_ref()) {
-                        if let Err(err) = updates_sender.send(topic) {
-                            error!("error occured while sending resource update: {:?}", err);
-                            break;
+        loop {
+            match pubsub.get_message() {
+                Ok(msg) => {
+                    if let Ok(update) = msg.get_payload::<String>() {
+                        if let Ok(topic) = Topic::try_from(update.as_ref()) {
+                            if let Err(err) = updates_sender.send(topic) {
+                                error!("error occured while sending resource update: {:?}", err);
+                                break 'base;
+                            }
                         }
                     }
                 }
-            }
-            Err(error) => {
-                // error when socket don't response in time
-                if error.to_string().contains("os error 11") {
-                    continue;
+                Err(error) => {
+                    // error when socket don't response in time
+                    if error.to_string().contains("os error 11") {
+                        break;
+                    }
+                    return Err(error.into());
                 }
-                return Err(error.into());
             }
         }
     }
