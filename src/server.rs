@@ -1,6 +1,6 @@
+use crate::client::Clients;
 use crate::repo::Repo;
 use crate::websocket;
-use crate::Clients;
 use futures::future::FutureExt;
 use std::sync::Arc;
 use warp::Filter;
@@ -17,11 +17,14 @@ pub struct ServerOptions {
     pub client_ping_failures_threshold: u16,
 }
 
-pub async fn start<R: Repo + Sync + Send + 'static>(
+pub fn start<R: Repo + Sync + Send + 'static>(
     server_port: u16,
     repo: Arc<R>,
     clients: Clients,
     options: ServerOptions,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    impl futures::Future<Output = ()>,
 ) {
     let with_repo = warp::any().map(move || repo.clone());
     let with_clients = warp::any().map(move || clients.clone());
@@ -43,13 +46,17 @@ pub async fn start<R: Repo + Sync + Send + 'static>(
                 websocket::handle_connection(socket, clients, repo, opts)
                     .map(|result| result.expect("Cannot handle ws connection"))
             })
-        });
+        })
+        .with(warp::log::custom(access));
 
     info!("websocket server listening on :{}", server_port);
 
-    warp::serve(routes.with(warp::log::custom(access)))
-        .run(([0, 0, 0, 0], server_port))
-        .await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (_addr, server) =
+        warp::serve(routes).bind_with_graceful_shutdown(([0, 0, 0, 0], server_port), async {
+            let _ = rx.await;
+        });
+    (tx, server)
 }
 
 fn access(info: warp::log::Info) {

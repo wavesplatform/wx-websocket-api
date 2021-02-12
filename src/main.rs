@@ -1,3 +1,4 @@
+mod client;
 mod config;
 mod error;
 mod messages;
@@ -8,38 +9,20 @@ mod updater;
 mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
+use client::ClientsTrait;
 use error::Error;
-use messages::OutcomeMessage;
 use models::Topic;
 use repo::RepoImpl;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use wavesexchange_log::{error, info};
 
-pub type ClientId = usize;
-
-#[derive(Debug)]
-pub struct Client {
-    sender: tokio::sync::mpsc::UnboundedSender<Result<warp::ws::Message, warp::Error>>,
-    subscriptions: HashSet<String>,
-    message_counter: i64,
-    pings: Vec<i64>,
-    new_subscriptions: HashSet<String>,
+fn main() -> Result<(), Error> {
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(tokio_main())?;
+    Ok(rt.shutdown_timeout(std::time::Duration::from_millis(1)))
 }
 
-impl Client {
-    fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
-        self.message_counter += 1;
-        self.sender.send(Ok(warp::ws::Message::from(message)))?;
-        Ok(())
-    }
-}
-
-pub type Clients = Arc<RwLock<HashMap<ClientId, Client>>>;
-
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn tokio_main() -> Result<(), Error> {
     let repo_config = config::load_repo()?;
     let server_config = config::load_server()?;
 
@@ -53,7 +36,7 @@ async fn main() -> Result<(), Error> {
     let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_key);
     let repo = Arc::new(repo);
 
-    let clients: Clients = Clients::default();
+    let clients = client::Clients::default();
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel::<Topic>();
 
@@ -72,13 +55,30 @@ async fn main() -> Result<(), Error> {
         client_ping_interval: tokio::time::Duration::from_secs(server_config.client_ping_interval),
         client_ping_failures_threshold: server_config.client_ping_failures_threshold,
     };
-    server::start(server_config.port, repo, clients, server_options).await;
+    let (tx, server) = server::start(
+        server_config.port,
+        repo.clone(),
+        clients.clone(),
+        server_options,
+    );
+    let server_handler = tokio::spawn(server);
 
-    if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle) {
-        let err = Error::from(e);
-        error!("{}", err);
-        return Err(err);
+    let updates_future = async {
+        if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle) {
+            let err = Error::from(e);
+            error!("{}", err);
+            return Err(err);
+        };
+        Ok(())
     };
+    let signal = tokio::signal::ctrl_c();
+    tokio::select! {
+        _ = signal => {},
+        _ = updates_future => {}
+    }
+    let _ = tx.send(());
+    server_handler.await?;
+    clients.clean(repo).await;
 
     Ok(())
 }

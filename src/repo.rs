@@ -1,5 +1,5 @@
+use crate::client::ClientId;
 use crate::error::Error;
-use crate::ClientId;
 use async_trait::async_trait;
 use bb8_redis::{bb8, redis::AsyncCommands, RedisConnectionManager};
 
