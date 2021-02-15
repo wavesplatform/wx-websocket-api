@@ -163,6 +163,10 @@ async fn messages_processing<R: Repo + Sync + Send + 'static>(
                             let error = format!("Invalid topic: {}", error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
                         }
+                        Err(Error::UrlParseError(error)) => {
+                            let error = format!("Invalid topic format: {:?}", error);
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
+                        }
                         Err(err) => {
                             error!("error occured while processing message: {:?}", err);
                             break;
