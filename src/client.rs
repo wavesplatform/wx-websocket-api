@@ -30,12 +30,12 @@ pub type Clients = Arc<RwLock<HashMap<ClientId, Client>>>;
 
 #[async_trait]
 pub trait ClientsTrait {
-    async fn clean<R: Repo + Send + Sync>(&self, repo: Arc<R>);
+    async fn clean<R: Repo>(&self, repo: Arc<R>);
 }
 
 #[async_trait]
 impl ClientsTrait for Clients {
-    async fn clean<R: Repo + Send + Sync>(&self, repo: Arc<R>) {
+    async fn clean<R: Repo>(&self, repo: Arc<R>) {
         for (_client_id, client) in self.write().await.iter_mut() {
             let fs = client
                 .subscriptions

@@ -17,7 +17,7 @@ pub struct ServerOptions {
     pub client_ping_failures_threshold: u16,
 }
 
-pub fn start<R: Repo + Sync + Send + 'static>(
+pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
     clients: Clients,
