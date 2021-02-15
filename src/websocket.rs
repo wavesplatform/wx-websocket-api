@@ -1,18 +1,19 @@
+use crate::client::{Client, ClientId, Clients};
 use crate::error::Error;
 use crate::messages::{IncomeMessage, OutcomeMessage};
 use crate::models::Topic;
 use crate::repo::Repo;
-use crate::{Client, ClientId, Clients};
 use futures::{future::try_join_all, FutureExt, StreamExt};
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tokio::sync::broadcast::Sender;
+use tokio::sync::broadcast::{Receiver, Sender};
 use warp::ws;
 use wavesexchange_log::{debug, error};
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
+const INVALID_TOPIC_ERROR_CODE: u16 = 3;
 
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
@@ -28,20 +29,21 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
 
-    let (ws_tx, mut ws_rx) = socket.split();
+    let (ws_tx, ws_rx) = socket.split();
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Client {
         sender: client_tx.clone(),
         subscriptions: HashSet::new(),
-        message_counter: 0,
+        new_subscriptions: HashSet::new(),
+        message_counter: 1,
         pings: vec![],
     };
 
     clients.write().await.insert(client_id, client);
 
-    let (client_disconnect_signal_sender, _) = tokio::sync::broadcast::channel::<()>(1);
-    let mut client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
+    let (client_disconnect_signal_sender, mut client_disconnect_signal_receiver) =
+        tokio::sync::broadcast::channel::<()>(1);
     // forward messages to ws connection
     tokio::task::spawn(async move {
         tokio::select! {
@@ -61,49 +63,83 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
     });
 
     let pinger_failure_signal_sender = client_disconnect_signal_sender.clone();
-    let mut pinger_failure_signal_receiver = pinger_failure_signal_sender.subscribe();
     {
         let clients = clients.clone();
         let client_id = client_id.clone();
-        let client_tx = client_tx.clone();
-        let mut client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
+        let client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
         // pinging
         tokio::task::spawn(async move {
-            let mut interval = tokio::time::interval(options.ping_interval);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let mut clients_lock = clients.write().await;
-                        let client = clients_lock
-                            .get_mut(&client_id)
-                            .expect(&format!("Unknown client_id: {}", client_id));
-
-                        if client.pings.len() >= options.ping_failures_threshold as usize {
-                            debug!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
-
-                            pinger_failure_signal_sender.send(())
-                                .expect("error occured while client disconnecting, because of ping failure");
-                            break;
-                        } else {
-                            client.message_counter += 1;
-                            client.pings.push(client.message_counter);
-
-                            client_tx
-                                .send(Ok(ws::Message::from(OutcomeMessage::Ping { message_number: client.message_counter })))
-                                .expect("error occured while sending message to client");
-                        }
-                    },
-                    _ = client_disconnect_signal_receiver.recv() => {
-                        debug!("got the client disconnect signal: stop the pinger task");
-                        break;
-                    }
-                }
-            }
+            pinging(
+                clients,
+                client_id,
+                client_disconnect_signal_receiver,
+                pinger_failure_signal_sender,
+                options,
+            )
+            .await
         });
     }
 
     // ws connection messages processing
-    let mut client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
+    let client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
+    messages_processing(
+        ws_rx,
+        clients.clone(),
+        client_id,
+        repo.clone(),
+        client_disconnect_signal_receiver,
+    )
+    .await;
+
+    // handle connection close
+    on_disconnect(repo, &client_id, clients, client_disconnect_signal_sender).await?;
+
+    Ok(())
+}
+
+async fn pinging(
+    clients: Clients,
+    client_id: ClientId,
+    mut client_disconnect_signal_receiver: Receiver<()>,
+    pinger_failure_signal_sender: Sender<()>,
+    options: HandleConnectionOptions,
+) {
+    let mut interval = tokio::time::interval(options.ping_interval);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let mut clients_lock = clients.write().await;
+                let client = clients_lock
+                    .get_mut(&client_id)
+                    .expect(&format!("Unknown client_id: {}", client_id));
+
+                if client.pings.len() >= options.ping_failures_threshold as usize {
+                    debug!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
+
+                    pinger_failure_signal_sender.send(())
+                        .expect("error occured while client disconnecting, because of ping failure");
+                    break;
+                } else {
+                    client.pings.push(client.message_counter);
+                    let message = OutcomeMessage::Ping { message_number: client.message_counter };
+                    client.send(message).expect("error occured while sending message to client");
+                }
+            },
+            _ = client_disconnect_signal_receiver.recv() => {
+                debug!("got the client disconnect signal: stop the pinger task");
+                break;
+            }
+        }
+    }
+}
+
+async fn messages_processing<R: Repo + Sync + Send + 'static>(
+    mut ws_rx: futures::stream::SplitStream<warp::ws::WebSocket>,
+    clients: Clients,
+    client_id: ClientId,
+    repo: Arc<R>,
+    mut client_disconnect_signal_receiver: Receiver<()>,
+) {
     loop {
         tokio::select! {
             next_message = ws_rx.next() => {
@@ -121,27 +157,17 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
                         break;
                     }
 
-                    if let Err(err) = on_message(repo.clone(), &clients, &client_id, msg).await {
-                        match err {
-                            crate::error::Error::UnknownIncomeMessage(error_message) => {
-                                let mut clients_lock = clients.write().await;
-                                let client = clients_lock
-                                    .get_mut(&client_id)
-                                    .expect(&format!("Unknown client_id: {}", client_id));
-
-                                client.message_counter += 1;
-
-                                let mut error_details = std::collections::HashMap::new();
-                                error_details.insert("reason".to_string(), error_message);
-                                client.sender
-                                    .send(Ok(ws::Message::from(OutcomeMessage::Error { message_number: client.message_counter, code: INVALID_MESSAGE_ERROR_CODE, message: "Invalid message".to_string(), details: Some(error_details) })))
-                                    .expect("error occured while sending message to client");
-                            },
-                            _ => {
-                                error!("error occured while processing message: {:?}", err);
-                                break;
-                            }
+                    match on_message(repo.clone(), &clients, &client_id, msg).await {
+                        Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, &clients, &client_id).await,
+                        Err(Error::InvalidTopic(error)) => {
+                            let error = format!("Invalid topic: {}", error);
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
                         }
+                        Err(err) => {
+                            error!("error occured while processing message: {:?}", err);
+                            break;
+                        }
+                        _ => ()
                     }
                 }
             },
@@ -149,21 +175,9 @@ pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
                 debug!("got the client disconnect signal: stop the messages processing");
                 break;
             }
-            _ = pinger_failure_signal_receiver.recv() => {
-                debug!("got the ping failure signal: stop the messages processing");
-                client_disconnect_signal_sender
-                    .send(())
-                    .expect("error occured while sending ping failure signal");
-                break;
-            }
 
         }
     }
-
-    // handle connection close
-    on_disconnect(repo, &client_id, clients, client_disconnect_signal_sender).await?;
-
-    Ok(())
 }
 
 async fn on_message<R: Repo>(
@@ -196,38 +210,25 @@ async fn on_message<R: Repo>(
             let _topic = Topic::try_from(subscription_key.as_str())?;
 
             if client.subscriptions.contains(&subscription_key) {
-                client.message_counter += 1;
-
-                client
-                    .sender
-                    .send(Ok(ws::Message::from(OutcomeMessage::Error {
-                        code: ALREADY_SUBSCRIBED_ERROR_CODE,
-                        message: "You are already subscribed for the specified topic".to_string(),
-                        details: None,
-                        message_number: client.message_counter,
-                    })))?;
+                let message = OutcomeMessage::Error {
+                    code: ALREADY_SUBSCRIBED_ERROR_CODE,
+                    message: "You are already subscribed for the specified topic".to_string(),
+                    details: None,
+                    message_number: client.message_counter,
+                };
+                client.send(message)?;
             } else {
                 repo.subscribe(subscription_key.clone()).await?;
-
                 client.subscriptions.insert(subscription_key.clone());
-                client.message_counter += 1;
-
-                client
-                    .sender
-                    .send(Ok(ws::Message::from(OutcomeMessage::Subscribed {
+                if let Some(value) = repo.get_by_key(&subscription_key).await? {
+                    let message = OutcomeMessage::Subscribed {
                         message_number: client.message_counter,
-                        topic: subscription_key.clone(),
-                    })))?;
-
-                if let Ok(value) = repo.get_by_key(&subscription_key).await {
-                    client.message_counter += 1;
-                    client
-                        .sender
-                        .send(Ok(ws::Message::from(OutcomeMessage::Update {
-                            message_number: client.message_counter,
-                            topic: subscription_key,
-                            value,
-                        })))?;
+                        topic: subscription_key,
+                        value,
+                    };
+                    client.send(message)?;
+                } else {
+                    client.new_subscriptions.insert(subscription_key);
                 }
             }
 
@@ -244,18 +245,40 @@ async fn on_message<R: Repo>(
                 client.subscriptions.remove(&subscription_key);
             }
 
-            client.message_counter += 1;
-
-            client
-                .sender
-                .send(Ok(ws::Message::from(OutcomeMessage::Unsubscribed {
-                    message_number: client.message_counter,
-                    topic: subscription_key,
-                })))?;
+            let message = OutcomeMessage::Unsubscribed {
+                message_number: client.message_counter,
+                topic: subscription_key,
+            };
+            client.send(message)?;
 
             Ok(())
         }
     }
+}
+
+async fn send_error(
+    error: impl Into<String>,
+    message: impl Into<String>,
+    code: u16,
+    clients: &Clients,
+    client_id: &ClientId,
+) {
+    let mut clients_lock = clients.write().await;
+    let client = clients_lock
+        .get_mut(client_id)
+        .expect(&format!("Unknown client_id: {}", client_id));
+
+    let mut error_details = std::collections::HashMap::new();
+    error_details.insert("reason".to_string(), error.into());
+    let message = OutcomeMessage::Error {
+        message_number: client.message_counter,
+        code,
+        message: message.into(),
+        details: Some(error_details),
+    };
+    client
+        .send(message)
+        .expect("error occured while sending message to client");
 }
 
 async fn on_disconnect<R: Repo>(
@@ -274,15 +297,14 @@ async fn on_disconnect<R: Repo>(
 
         debug!(
             "client #{} disconnected; he got {} messages",
-            client_id, client.message_counter
+            client_id,
+            client.message_counter - 1
         );
     }
 
     clients.write().await.remove(client_id);
 
-    client_disconnect_signal_sender
-        .send(())
-        .expect("error occured while client disconnecting");
+    let _ = client_disconnect_signal_sender.send(());
 
     Ok(())
 }
@@ -296,24 +318,30 @@ pub async fn updates_handler<R: Repo>(
     while let Some(topic) = updates_receiver.recv().await {
         let topic_encoded = topic.to_string();
 
-        let value = repo
+        if let Some(value) = repo
             .get_by_key(topic_encoded.as_ref())
             .await
-            .expect(&format!("Cannot get value by key {}", topic_encoded));
-
-        for (_, client) in clients.write().await.iter_mut() {
-            let subscribtion_key = topic_encoded.clone();
-            if client.subscriptions.contains(&subscribtion_key) {
-                client.message_counter += 1;
-
-                let reply = ws::Message::from(OutcomeMessage::Update {
-                    message_number: client.message_counter,
-                    topic: subscribtion_key,
-                    value: value.clone(),
-                });
-
-                if let Err(err) = client.sender.send(Ok(reply)) {
-                    debug!("error occured while sending message: {:?}", err)
+            .expect(&format!("Cannot get value by key {}", topic_encoded))
+        {
+            for (_, client) in clients.write().await.iter_mut() {
+                let subscription_key = topic_encoded.clone();
+                if client.subscriptions.contains(&subscription_key) {
+                    let message = if client.new_subscriptions.remove(&subscription_key) {
+                        OutcomeMessage::Subscribed {
+                            message_number: client.message_counter,
+                            topic: subscription_key,
+                            value: value.clone(),
+                        }
+                    } else {
+                        OutcomeMessage::Update {
+                            message_number: client.message_counter,
+                            topic: subscription_key,
+                            value: value.clone(),
+                        }
+                    };
+                    if let Err(err) = client.send(message) {
+                        debug!("error occured while sending message: {:?}", err)
+                    }
                 }
             }
         }
