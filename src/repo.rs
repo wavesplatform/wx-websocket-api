@@ -14,7 +14,7 @@ pub struct Config {
 }
 
 #[async_trait]
-pub trait Repo {
+pub trait Repo: Send + Sync {
     async fn get_connection_id(&self) -> Result<ClientId, Error>;
 
     // HEXISTS REDIS_SUBSCRIPTIONS_KEY <key>?

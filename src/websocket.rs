@@ -21,7 +21,7 @@ pub struct HandleConnectionOptions {
     pub ping_failures_threshold: u16,
 }
 
-pub async fn handle_connection<R: Repo + Sync + Send + 'static>(
+pub async fn handle_connection<R: Repo>(
     socket: ws::WebSocket,
     clients: Clients,
     repo: Arc<R>,
@@ -133,7 +133,7 @@ async fn pinging(
     }
 }
 
-async fn messages_processing<R: Repo + Sync + Send + 'static>(
+async fn messages_processing<R: Repo>(
     mut ws_rx: futures::stream::SplitStream<warp::ws::WebSocket>,
     clients: Clients,
     client_id: ClientId,
