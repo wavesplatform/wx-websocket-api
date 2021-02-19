@@ -41,9 +41,10 @@ pub fn start<R: Repo + 'static>(
         .and(with_repo.clone())
         .and(with_clients.clone())
         .and(with_opts.clone())
-        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients, opts| {
+        .and(warp::header::optional::<String>("x-request-id"))
+        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients, opts, req_id| {
             ws.on_upgrade(move |socket| {
-                websocket::handle_connection(socket, clients, repo, opts)
+                websocket::handle_connection(socket, clients, repo, opts, req_id)
                     .map(|result| result.expect("Cannot handle ws connection"))
             })
         })
