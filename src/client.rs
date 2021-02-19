@@ -11,17 +11,18 @@ pub type ClientId = usize;
 
 #[derive(Debug)]
 pub struct Client {
-    pub sender: tokio::sync::mpsc::UnboundedSender<Result<warp::ws::Message, warp::Error>>,
+    pub sender: tokio::sync::mpsc::UnboundedSender<warp::ws::Message>,
     pub subscriptions: HashSet<String>,
     pub message_counter: i64,
     pub pings: Vec<i64>,
+    pub request_id: Option<String>,
     pub new_subscriptions: HashSet<String>,
 }
 
 impl Client {
     pub fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
         self.message_counter += 1;
-        self.sender.send(Ok(warp::ws::Message::from(message)))?;
+        self.sender.send(warp::ws::Message::from(message))?;
         Ok(())
     }
 }

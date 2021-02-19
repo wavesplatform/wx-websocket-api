@@ -19,9 +19,7 @@ pub enum Error {
     #[error("SendUpdateResourceError: {0}")]
     SendUpdateResourceError(#[from] tokio::sync::mpsc::error::SendError<Topic>),
     #[error("SendMessageError: {0}")]
-    SendMessageError(
-        #[from] tokio::sync::mpsc::error::SendError<Result<warp::ws::Message, warp::Error>>,
-    ),
+    SendMessageError(#[from] tokio::sync::mpsc::error::SendError<warp::ws::Message>),
     #[error("InvalidUpdateResource: {0}")]
     InvalidUpdateResource(String),
     #[error("InvalidConfigPath: {0}")]

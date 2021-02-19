@@ -3,13 +3,13 @@ use crate::error::Error;
 use crate::messages::{IncomeMessage, OutcomeMessage};
 use crate::models::Topic;
 use crate::repo::Repo;
-use futures::{future::try_join_all, FutureExt, StreamExt};
+use futures::{future::try_join_all, SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::broadcast::{Receiver, Sender};
 use warp::ws;
-use wavesexchange_log::{debug, error};
+use wavesexchange_log::{error, info};
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
@@ -26,10 +26,9 @@ pub async fn handle_connection<R: Repo>(
     clients: Clients,
     repo: Arc<R>,
     options: HandleConnectionOptions,
+    request_id: Option<String>,
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
-
-    let (ws_tx, ws_rx) = socket.split();
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Client {
@@ -37,30 +36,13 @@ pub async fn handle_connection<R: Repo>(
         subscriptions: HashSet::new(),
         new_subscriptions: HashSet::new(),
         message_counter: 1,
+        request_id: request_id.clone(),
         pings: vec![],
     };
 
     clients.write().await.insert(client_id, client);
 
-    let (client_disconnect_signal_sender, mut client_disconnect_signal_receiver) =
-        tokio::sync::broadcast::channel::<()>(1);
-    // forward messages to ws connection
-    tokio::task::spawn(async move {
-        tokio::select! {
-            _ = client_rx.forward(ws_tx).map(|result| {
-                if let Err(err) = result {
-                    error!(
-                        "error occurred while sending message to ws client: {:?}",
-                        err
-                    )
-                }
-            }) => (),
-            _ = client_disconnect_signal_receiver.recv() => {
-                debug!("got the client disconnect signal: stop the forwarder task");
-                ()
-            }
-        }
-    });
+    let (client_disconnect_signal_sender, _) = tokio::sync::broadcast::channel::<()>(1);
 
     let pinger_failure_signal_sender = client_disconnect_signal_sender.clone();
     {
@@ -83,11 +65,12 @@ pub async fn handle_connection<R: Repo>(
     // ws connection messages processing
     let client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
     messages_processing(
-        ws_rx,
+        socket,
         clients.clone(),
         client_id,
         repo.clone(),
         client_disconnect_signal_receiver,
+        client_rx,
     )
     .await;
 
@@ -114,7 +97,7 @@ async fn pinging(
                     .expect(&format!("Unknown client_id: {}", client_id));
 
                 if client.pings.len() >= options.ping_failures_threshold as usize {
-                    debug!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
+                    info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
 
                     pinger_failure_signal_sender.send(())
                         .expect("error occured while client disconnecting, because of ping failure");
@@ -126,7 +109,7 @@ async fn pinging(
                 }
             },
             _ = client_disconnect_signal_receiver.recv() => {
-                debug!("got the client disconnect signal: stop the pinger task");
+                info!("got the client disconnect signal: stop the pinger task");
                 break;
             }
         }
@@ -134,26 +117,29 @@ async fn pinging(
 }
 
 async fn messages_processing<R: Repo>(
-    mut ws_rx: futures::stream::SplitStream<warp::ws::WebSocket>,
+    mut socket: warp::ws::WebSocket,
     clients: Clients,
     client_id: ClientId,
     repo: Arc<R>,
     mut client_disconnect_signal_receiver: Receiver<()>,
+    mut client_rx: tokio::sync::mpsc::UnboundedReceiver<warp::ws::Message>,
 ) {
     loop {
         tokio::select! {
-            next_message = ws_rx.next() => {
+            next_message = socket.next() => {
                 if let Some(next_msg_result) = next_message {
                     let msg = match next_msg_result {
                         Ok(msg) => msg,
-                        Err(_disconnected) => {
-                            debug!("client #{} connection was unexpectedly closed", client_id);
+                        Err(disconnected) => {
+                            let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
+                            info!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
-                        debug!("client #{} connection was closed", client_id);
+                        let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
+                        info!("client #{} connection was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
@@ -167,6 +153,11 @@ async fn messages_processing<R: Repo>(
                             let error = format!("Invalid topic format: {:?}", error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
                         }
+                        Err(Error::InvalidPongMessage) => {
+                            // nothing to do
+                            // just close the connection
+                            break;
+                        }
                         Err(err) => {
                             error!("error occured while processing message: {:?}", err);
                             break;
@@ -175,8 +166,20 @@ async fn messages_processing<R: Repo>(
                     }
                 }
             },
+            msg = client_rx.recv() => {
+                match msg {
+                    Some(message) => {
+                        if let Err(err) = socket.send(message).await {
+                            let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
+                            error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
+                            break;
+                        }
+                    }
+                    None => break
+                }
+            }
             _ = client_disconnect_signal_receiver.recv() => {
-                debug!("got the client disconnect signal: stop the messages processing");
+                info!("got the client disconnect signal: stop the messages processing");
                 break;
             }
 
@@ -188,9 +191,9 @@ async fn on_message<R: Repo>(
     repo: Arc<R>,
     clients: &Clients,
     client_id: &ClientId,
-    msg: ws::Message,
+    raw_msg: ws::Message,
 ) -> Result<(), Error> {
-    let msg = IncomeMessage::try_from(msg)?;
+    let msg = IncomeMessage::try_from(raw_msg.clone())?;
 
     let mut clients_lock = clients.write().await;
     let client = clients_lock
@@ -204,6 +207,7 @@ async fn on_message<R: Repo>(
                 Ok(())
             } else {
                 // client sent invalid pong message
+                info!("got invalid pong message: {:?}", raw_msg);
                 Err(Error::InvalidPongMessage)
             }
         }
@@ -299,10 +303,11 @@ async fn on_disconnect<R: Repo>(
 
         try_join_all(fs).await?;
 
-        debug!(
+        info!(
             "client #{} disconnected; he got {} messages",
             client_id,
-            client.message_counter - 1
+            client.message_counter - 1;
+            "req_id" => client.request_id.clone()
         );
     }
 
@@ -344,7 +349,7 @@ pub async fn updates_handler<R: Repo>(
                         }
                     };
                     if let Err(err) = client.send(message) {
-                        debug!("error occured while sending message: {:?}", err)
+                        info!("error occured while sending message: {:?}", err)
                     }
                 }
             }
