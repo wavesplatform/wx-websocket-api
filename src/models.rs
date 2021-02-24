@@ -9,6 +9,7 @@ pub enum Topic {
     Config(ConfigParameters),
     State(State),
     TestResource(TestResource),
+    BlockchainHeight,
 }
 
 impl TryFrom<&str> for Topic {
@@ -30,6 +31,7 @@ impl TryFrom<&str> for Topic {
                 let ps = TestResource::try_from(url)?;
                 Ok(Topic::TestResource(ps))
             }
+            Some("blockchain_height") => Ok(Topic::BlockchainHeight),
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
     }
@@ -56,6 +58,10 @@ impl ToString for Topic {
                 if let Some(query) = ps.query.clone() {
                     url.set_query(Some(query.as_str()));
                 }
+                url.as_str().to_owned()
+            }
+            Topic::BlockchainHeight => {
+                url.set_host(Some("blockchain_height")).unwrap();
                 url.as_str().to_owned()
             }
         }
@@ -196,5 +202,15 @@ impl TryFrom<Url> for TestResource {
             path: u.path().to_string(),
             query: u.query().map(|q| q.to_owned()),
         })
+    }
+}
+
+pub struct BlockchainHeight {}
+
+impl TryFrom<Url> for BlockchainHeight {
+    type Error = Error;
+
+    fn try_from(_value: Url) -> Result<Self, Self::Error> {
+        Ok(Self {})
     }
 }
