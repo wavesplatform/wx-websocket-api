@@ -18,8 +18,9 @@ use wavesexchange_log::{error, info};
 
 fn main() -> Result<(), Error> {
     let mut rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(tokio_main())?;
-    Ok(rt.shutdown_timeout(std::time::Duration::from_millis(1)))
+    let result = rt.block_on(tokio_main());
+    rt.shutdown_timeout(std::time::Duration::from_millis(1));
+    result
 }
 
 async fn tokio_main() -> Result<(), Error> {
