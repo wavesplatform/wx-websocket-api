@@ -70,7 +70,7 @@ impl ToString for Topic {
             Topic::Transaction(transaction) => {
                 url.set_host(Some("transaction")).unwrap();
                 url.set_path(&transaction.tx_type.to_string());
-                url.set_query(Some("asd=qwe"));
+                url.set_query(Some(format!("address={}", &transaction.address).as_str()));
                 url.as_str().to_owned()
             }
         }
@@ -263,10 +263,18 @@ fn transaction_topic_test() {
     let transaction = TransactionByAddress::try_from(url).unwrap();
     assert_eq!(transaction.tx_type.to_string(), "all".to_string());
     assert_eq!(transaction.address, "some_address".to_string());
+    assert_eq!(
+        "topic://transaction/all?address=some_address".to_string(),
+        Topic::Transaction(transaction).to_string()
+    );
     let url = Url::parse("topic://transaction/exchange?address=some_other_address").unwrap();
     let transaction = TransactionByAddress::try_from(url).unwrap();
     assert_eq!(transaction.tx_type.to_string(), "exchange".to_string());
     assert_eq!(transaction.address, "some_other_address".to_string());
+    assert_eq!(
+        "topic://transaction/exchange?address=some_other_address".to_string(),
+        Topic::Transaction(transaction).to_string()
+    );
     let url = Url::parse("topic://transaction/exchange").unwrap();
     let error = TransactionByAddress::try_from(url);
     assert!(error.is_err());
