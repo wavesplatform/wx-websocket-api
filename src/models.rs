@@ -196,7 +196,7 @@ pub struct TestResource {
 impl ToString for TestResource {
     fn to_string(&self) -> String {
         let mut s = self.path.clone();
-        if let Some(query) = self.query.clone() {
+        if let Some(ref query) = self.query {
             s = format!("{}?{}", s, query).to_string();
         }
         s
@@ -248,7 +248,7 @@ impl TryFrom<Url> for TransactionByAddress {
 
 fn get_address(value: &Url) -> Result<String, Error> {
     for (k, v) in value.query_pairs() {
-        if k.to_string() == "address".to_string() {
+        if k == "address" {
             return Ok(v.to_string());
         }
     }
