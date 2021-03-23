@@ -209,7 +209,7 @@ impl ToString for TestResource {
     fn to_string(&self) -> String {
         let mut s = self.path.clone();
         if let Some(ref query) = self.query {
-            s = format!("{}?{}", s, query).to_string();
+            s = format!("{}?{}", s, query);
         }
         s
     }
