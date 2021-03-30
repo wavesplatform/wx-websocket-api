@@ -309,7 +309,7 @@ impl TryFrom<Url> for TransactionExchange {
 
 fn get_value_from_query(value: &Url, key: &str) -> Result<String, Error> {
     for (k, v) in value.query_pairs() {
-        if k == key {
+        if k == key && !v.is_empty() {
             return Ok(v.to_string());
         }
     }
@@ -358,6 +358,9 @@ fn transaction_topic_test() {
     } else {
         panic!("wrong exchange transaction")
     }
+    let url = Url::parse("topic://transaction/exchange?amount_asset=asd&price_asset=").unwrap();
+    let error = Transaction::try_from(url);
+    assert!(error.is_err());
 }
 
 #[derive(Clone, Debug)]
