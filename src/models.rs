@@ -3,7 +3,7 @@ use crate::error::{self, Error};
 use std::{convert::TryFrom, str::FromStr};
 use url::Url;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Topic {
     Config(ConfigParameters),
     State(State),
@@ -98,7 +98,7 @@ impl ToString for Topic {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConfigFile {
     pub path: String,
 }
@@ -131,7 +131,7 @@ impl ToString for ConfigFile {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConfigParameters {
     pub file: ConfigFile,
 }
@@ -157,7 +157,7 @@ impl TryFrom<Url> for ConfigParameters {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct State {
     pub address: String,
     pub key: String,
@@ -208,7 +208,7 @@ fn topic_state_test() {
     assert_eq!("some_address/some_key".to_string(), state_string);
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TestResource {
     pub path: String,
     pub query: Option<String>,
@@ -245,19 +245,19 @@ impl TryFrom<Url> for BlockchainHeight {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Transaction {
     ByAddress(TransactionByAddress),
     Exchange(TransactionExchange),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TransactionExchange {
     pub amount_asset: String,
     pub price_asset: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TransactionByAddress {
     pub tx_type: TransactionType,
     pub address: String,
@@ -372,7 +372,7 @@ fn transaction_topic_test() {
     assert!(error.is_err());
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TransactionType {
     All,
     Genesis,
@@ -394,8 +394,8 @@ pub enum TransactionType {
     UpdateAssetInfo,
 }
 
-impl ToString for TransactionType {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for TransactionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::All => "all",
             Self::Genesis => "genesis",
@@ -416,7 +416,7 @@ impl ToString for TransactionType {
             Self::InvokeScript => "invoke_script",
             Self::UpdateAssetInfo => "update_asset_info",
         };
-        s.to_string()
+        write!(f, "{}", s)
     }
 }
 
