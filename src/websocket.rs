@@ -3,8 +3,8 @@ use crate::error::Error;
 use crate::messages::{IncomeMessage, OutcomeMessage};
 use crate::models::Topic;
 use crate::repo::Repo;
-use futures::{future::try_join_all, SinkExt, StreamExt};
-use std::collections::HashSet;
+use futures::{stream, SinkExt, StreamExt, TryStreamExt};
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::broadcast::{Receiver, Sender};
@@ -33,7 +33,7 @@ pub async fn handle_connection<R: Repo>(
 
     let client = Client {
         sender: client_tx.clone(),
-        subscriptions: HashSet::new(),
+        subscriptions: HashMap::new(),
         new_subscriptions: HashSet::new(),
         message_counter: 1,
         request_id: request_id.clone(),
@@ -212,12 +212,13 @@ async fn on_message<R: Repo>(
             }
         }
         IncomeMessage::Subscribe {
-            topic: subscription_key,
+            topic: client_subscription_key,
         } => {
             // just for subscription key validation
-            let _topic = Topic::try_from(subscription_key.as_str())?;
+            let topic = Topic::try_from(&client_subscription_key)?;
+            let subscription_key = topic.to_string();
 
-            if client.subscriptions.contains(&subscription_key) {
+            if client.subscriptions.contains_key(&topic) {
                 let message = OutcomeMessage::Error {
                     code: ALREADY_SUBSCRIBED_ERROR_CODE,
                     message: "You are already subscribed for the specified topic".to_string(),
@@ -227,35 +228,38 @@ async fn on_message<R: Repo>(
                 client.send(message)?;
             } else {
                 repo.subscribe(subscription_key.clone()).await?;
-                client.subscriptions.insert(subscription_key.clone());
+                client
+                    .subscriptions
+                    .insert(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
                     let message = OutcomeMessage::Subscribed {
                         message_number: client.message_counter,
-                        topic: subscription_key,
+                        topic: client_subscription_key,
                         value,
                     };
                     client.send(message)?;
                 } else {
-                    client.new_subscriptions.insert(subscription_key);
+                    client.new_subscriptions.insert(topic);
                 }
             }
 
             Ok(())
         }
         IncomeMessage::Unsubscribe {
-            topic: subscription_key,
+            topic: client_subscription_key,
         } => {
             // just for subscription key validation
-            let _topic = Topic::try_from(subscription_key.as_str())?;
+            let topic = Topic::try_from(&client_subscription_key)?;
+            let subscription_key = topic.to_string();
 
-            if client.subscriptions.contains(&subscription_key) {
+            if client.subscriptions.contains_key(&topic) {
                 repo.unsubscribe(subscription_key.clone()).await?;
-                client.subscriptions.remove(&subscription_key);
+                client.subscriptions.remove(&topic);
             }
 
             let message = OutcomeMessage::Unsubscribed {
                 message_number: client.message_counter,
-                topic: subscription_key,
+                topic: client_subscription_key,
             };
             client.send(message)?;
 
@@ -296,12 +300,12 @@ async fn on_disconnect<R: Repo>(
     client_disconnect_signal_sender: Sender<()>,
 ) -> Result<(), Error> {
     if let Some(client) = clients.read().await.get(client_id) {
-        let fs = client
-            .subscriptions
-            .iter()
-            .map(|subscription_key| repo.unsubscribe(subscription_key));
-
-        try_join_all(fs).await?;
+        stream::iter(client.subscriptions.iter())
+            .map(|(topic, _)| Ok((repo.clone(), topic)))
+            .try_for_each_concurrent(10, |(repo, topic)| async move {
+                repo.unsubscribe(topic.to_string()).await
+            })
+            .await?;
 
         info!(
             "client #{} disconnected; he got {} messages",
@@ -319,32 +323,30 @@ async fn on_disconnect<R: Repo>(
 }
 
 pub async fn updates_handler<R: Repo>(
-    updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
+    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
     repo: Arc<R>,
     clients: Clients,
 ) -> Result<(), Error> {
-    let mut updates_receiver = updates_receiver;
     while let Some(topic) = updates_receiver.recv().await {
-        let topic_encoded = topic.to_string();
+        let subscription_key = topic.to_string();
 
         if let Some(value) = repo
-            .get_by_key(topic_encoded.as_ref())
+            .get_by_key(subscription_key.as_ref())
             .await
-            .expect(&format!("Cannot get value by key {}", topic_encoded))
+            .expect(&format!("Cannot get value by key {}", subscription_key))
         {
             for (_, client) in clients.write().await.iter_mut() {
-                let subscription_key = topic_encoded.clone();
-                if client.subscriptions.contains(&subscription_key) {
-                    let message = if client.new_subscriptions.remove(&subscription_key) {
+                if let Some(subscription_string) = client.subscriptions.get(&topic) {
+                    let message = if client.new_subscriptions.remove(&topic) {
                         OutcomeMessage::Subscribed {
                             message_number: client.message_counter,
-                            topic: subscription_key,
+                            topic: subscription_string.clone(),
                             value: value.clone(),
                         }
                     } else {
                         OutcomeMessage::Update {
                             message_number: client.message_counter,
-                            topic: subscription_key,
+                            topic: subscription_string.clone(),
                             value: value.clone(),
                         }
                     };

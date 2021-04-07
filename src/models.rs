@@ -1,3 +1,4 @@
+use crate::client::ClientSubscriptionKey;
 use crate::error::{self, Error};
 use std::{convert::TryFrom, str::FromStr};
 use url::Url;
@@ -37,6 +38,14 @@ impl TryFrom<&str> for Topic {
             }
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
+    }
+}
+
+impl TryFrom<&ClientSubscriptionKey> for Topic {
+    type Error = Error;
+
+    fn try_from(v: &ClientSubscriptionKey) -> Result<Self, Self::Error> {
+        Topic::try_from(v.0.as_str())
     }
 }
 

@@ -17,7 +17,7 @@ pub fn run(
             match pubsub.get_message() {
                 Ok(msg) => {
                     if let Ok(update) = msg.get_payload::<String>() {
-                        if let Ok(topic) = Topic::try_from(update.as_ref()) {
+                        if let Ok(topic) = Topic::try_from(update.as_str()) {
                             if let Err(err) = updates_sender.send(topic) {
                                 error!("error occured while sending resource update: {:?}", err);
                                 break 'base;
