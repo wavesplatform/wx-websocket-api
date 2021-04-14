@@ -32,7 +32,7 @@ impl TryFrom<&str> for Topic {
                 Ok(Topic::TestResource(ps))
             }
             Some("blockchain_height") => Ok(Topic::BlockchainHeight),
-            Some("transaction") => {
+            Some("transactions") => {
                 let transaction = Transaction::try_from(url)?;
                 Ok(Topic::Transaction(transaction))
             }
@@ -77,7 +77,7 @@ impl ToString for Topic {
                 url.as_str().to_owned()
             }
             Topic::Transaction(Transaction::ByAddress(transaction)) => {
-                url.set_host(Some("transaction")).unwrap();
+                url.set_host(Some("transactions")).unwrap();
                 url.set_query(Some(
                     format!(
                         "type={}&address={}",
@@ -88,7 +88,7 @@ impl ToString for Topic {
                 url.as_str().to_owned()
             }
             Topic::Transaction(Transaction::Exchange(transaction)) => {
-                url.set_host(Some("transaction")).unwrap();
+                url.set_host(Some("transactions")).unwrap();
                 url.set_query(Some(
                     format!(
                         "type=exchange&amount_asset={}&price_asset={}",
@@ -333,27 +333,27 @@ fn get_value_from_query(value: &Url, key: &str) -> Result<String, Error> {
 
 #[test]
 fn transaction_topic_test() {
-    let url = Url::parse("topic://transaction?type=all&address=some_address").unwrap();
+    let url = Url::parse("topic://transactions?type=all&address=some_address").unwrap();
     if let Transaction::ByAddress(transaction) = Transaction::try_from(url).unwrap() {
         assert_eq!(transaction.tx_type.to_string(), "all".to_string());
         assert_eq!(transaction.address, "some_address".to_string());
         assert_eq!(
-            "topic://transaction?type=all&address=some_address".to_string(),
+            "topic://transactions?type=all&address=some_address".to_string(),
             Topic::Transaction(Transaction::ByAddress(transaction)).to_string()
         );
     } else {
         panic!("wrong transaction")
     }
-    let url = Url::parse("topic://transaction?type=issue&address=some_other_address").unwrap();
+    let url = Url::parse("topic://transactions?type=issue&address=some_other_address").unwrap();
     if let Transaction::ByAddress(transaction) = Transaction::try_from(url).unwrap() {
         assert_eq!(transaction.tx_type.to_string(), "issue".to_string());
         assert_eq!(transaction.address, "some_other_address".to_string());
         assert_eq!(
-            "topic://transaction?type=issue&address=some_other_address".to_string(),
+            "topic://transactions?type=issue&address=some_other_address".to_string(),
             Topic::Transaction(Transaction::ByAddress(transaction)).to_string()
         );
     }
-    let url = Url::parse("topic://transaction").unwrap();
+    let url = Url::parse("topic://transactions").unwrap();
     let error = Transaction::try_from(url);
     assert!(error.is_err());
     assert_eq!(
@@ -361,19 +361,19 @@ fn transaction_topic_test() {
         "InvalidTransactionQuery: None".to_string()
     );
     let url =
-        Url::parse("topic://transaction?type=exchange&amount_asset=asd&price_asset=qwe").unwrap();
+        Url::parse("topic://transactions?type=exchange&amount_asset=asd&price_asset=qwe").unwrap();
     if let Transaction::Exchange(transaction) = Transaction::try_from(url).unwrap() {
         assert_eq!(transaction.amount_asset, "asd".to_string());
         assert_eq!(transaction.price_asset, "qwe".to_string());
         assert_eq!(
-            "topic://transaction?type=exchange&amount_asset=asd&price_asset=qwe".to_string(),
+            "topic://transactions?type=exchange&amount_asset=asd&price_asset=qwe".to_string(),
             Topic::Transaction(Transaction::Exchange(transaction)).to_string()
         );
     } else {
         panic!("wrong exchange transaction")
     }
     let url =
-        Url::parse("topic://transaction?type=exchange&amount_asset=asd&price_asset=").unwrap();
+        Url::parse("topic://transactions?type=exchange&amount_asset=asd&price_asset=").unwrap();
     let error = Transaction::try_from(url);
     assert!(error.is_err());
 }
