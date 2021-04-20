@@ -3,11 +3,13 @@ use crate::messages::OutcomeMessage;
 use crate::models::Topic;
 use crate::repo::Repo;
 use async_trait::async_trait;
-use futures::future::try_join_all;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use warp::ws::Message;
+use wavesexchange_log::{error, info};
 
 pub type ClientId = usize;
 
@@ -16,23 +18,183 @@ pub struct ClientSubscriptionKey(pub String);
 
 #[derive(Debug)]
 pub struct Client {
-    pub sender: tokio::sync::mpsc::UnboundedSender<warp::ws::Message>,
-    pub subscriptions: HashMap<Topic, ClientSubscriptionKey>,
-    pub message_counter: i64,
-    pub pings: Vec<i64>,
-    pub request_id: Option<String>,
-    pub new_subscriptions: HashSet<Topic>,
+    sender: tokio::sync::mpsc::UnboundedSender<Message>,
+    subscriptions: HashMap<Topic, ClientSubscriptionKey>,
+    message_counter: i64,
+    pings: Vec<i64>,
+    request_id: Option<String>,
+    new_subscriptions: HashSet<Topic>,
 }
 
 impl Client {
-    pub fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
+    pub fn new(
+        sender: tokio::sync::mpsc::UnboundedSender<Message>,
+        request_id: Option<String>,
+    ) -> Self {
+        Client {
+            sender,
+            request_id,
+            subscriptions: HashMap::new(),
+            new_subscriptions: HashSet::new(),
+            message_counter: 1,
+            pings: vec![],
+        }
+    }
+
+    pub fn get_request_id(&self) -> &Option<String> {
+        &self.request_id
+    }
+
+    pub fn contains_subscription(&self, topic: &Topic) -> bool {
+        self.subscriptions.contains_key(topic)
+    }
+
+    pub fn add_subscription(
+        &mut self,
+        topic: Topic,
+        client_subscription_key: ClientSubscriptionKey,
+    ) {
+        self.subscriptions.insert(topic, client_subscription_key);
+    }
+
+    pub fn add_new_subscription(&mut self, topic: Topic) {
+        self.new_subscriptions.insert(topic);
+    }
+
+    pub fn remove_subscription(&mut self, topic: &Topic) {
+        self.subscriptions.remove(topic);
+        self.new_subscriptions.remove(topic);
+    }
+
+    pub fn handle_pong(&mut self, message_number: i64) -> Result<(), Error> {
+        if self.pings.contains(&message_number) {
+            self.pings.clear();
+            Ok(())
+        } else {
+            // client sent invalid pong message
+            info!("got invalid pong message");
+            Err(Error::InvalidPongMessage)
+        }
+    }
+
+    pub fn pings_len(&self) -> usize {
+        self.pings.len()
+    }
+
+    pub fn send_ping(&mut self) -> Result<(), Error> {
+        self.pings.push(self.message_counter);
+        let message = OutcomeMessage::Ping {
+            message_number: self.message_counter,
+        };
+        self.send(message)
+    }
+
+    pub fn send_subscribed(
+        &mut self,
+        subscription_key: ClientSubscriptionKey,
+        value: String,
+    ) -> Result<(), Error> {
+        let message = OutcomeMessage::Subscribed {
+            message_number: self.message_counter,
+            topic: subscription_key,
+            value,
+        };
+        self.send(message)
+    }
+
+    pub fn send_update(&mut self, topic: &Topic, value: String) -> Result<(), Error> {
+        if let Some(client_subscription_key) = self.subscriptions.get(topic) {
+            let message = if self.new_subscriptions.remove(topic) {
+                OutcomeMessage::Subscribed {
+                    message_number: self.message_counter,
+                    topic: client_subscription_key.clone(),
+                    value,
+                }
+            } else {
+                OutcomeMessage::Update {
+                    message_number: self.message_counter,
+                    topic: client_subscription_key.clone(),
+                    value,
+                }
+            };
+            self.send(message)?;
+        }
+        Ok(())
+    }
+
+    pub fn send_unsubscribed(
+        &mut self,
+        subscription_key: ClientSubscriptionKey,
+    ) -> Result<(), Error> {
+        let message = OutcomeMessage::Unsubscribed {
+            message_number: self.message_counter,
+            topic: subscription_key,
+        };
+        self.send(message)
+    }
+
+    pub fn send_error(
+        &mut self,
+        code: u16,
+        message: String,
+        details: Option<HashMap<String, String>>,
+    ) -> Result<(), Error> {
+        let message = OutcomeMessage::Error {
+            code,
+            message,
+            details,
+            message_number: self.message_counter,
+        };
+        self.send(message)
+    }
+
+    pub fn messages_count(&self) -> i64 {
+        self.message_counter - 1
+    }
+
+    pub fn subscriptions_iter(
+        &self,
+    ) -> std::collections::hash_map::Iter<'_, Topic, ClientSubscriptionKey> {
+        self.subscriptions.iter()
+    }
+
+    fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
         self.message_counter += 1;
-        self.sender.send(warp::ws::Message::from(message))?;
+        self.sender.send(Message::from(message))?;
         Ok(())
     }
 }
 
-pub type Clients = Arc<RwLock<HashMap<ClientId, Client>>>;
+pub type Clients = Arc<RwLock<HashMap<ClientId, Arc<Mutex<Client>>>>>;
+pub type Topics = Arc<RwLock<ClientIdsByTopics>>;
+
+#[derive(Default)]
+pub struct ClientIdsByTopics(HashMap<Topic, HashSet<ClientId>>);
+
+impl ClientIdsByTopics {
+    pub fn add_subscription(&mut self, topic: Topic, client_id: ClientId) {
+        if let Some(clients) = self.0.get_mut(&topic) {
+            clients.insert(client_id);
+        } else {
+            let mut v = HashSet::new();
+            v.insert(client_id);
+            self.0.insert(topic, v);
+        }
+    }
+
+    pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
+        if let Some(client_ids) = self.0.get_mut(&topic) {
+            client_ids.remove(client_id);
+            if client_ids.is_empty() {
+                self.0.remove(&topic);
+            }
+        };
+    }
+
+    pub fn get_client_ids(&self, topic: &Topic) -> Option<&HashSet<ClientId>> {
+        self.0.get(topic)
+    }
+}
 
 #[async_trait]
 pub trait ClientsTrait {
@@ -42,16 +204,18 @@ pub trait ClientsTrait {
 #[async_trait]
 impl ClientsTrait for Clients {
     async fn clean<R: Repo>(&self, repo: Arc<R>) {
-        for (_client_id, client) in self.write().await.iter_mut() {
-            let fs = client
-                .subscriptions
-                .iter()
-                .map(|(topic, _subscription_string)| {
+        if let Err(error) = stream::iter(self.write().await.iter_mut())
+            .map(|(_client_id, client)| Ok::<_, Error>((client, repo.clone())))
+            .try_for_each_concurrent(10, |(client, repo)| async move {
+                for (topic, _subscription_key) in client.lock().await.subscriptions.iter() {
                     let subscription_key = topic.to_string();
-                    repo.unsubscribe(subscription_key)
-                });
-
-            let _ = try_join_all(fs).await;
-        }
+                    repo.unsubscribe(subscription_key).await?;
+                }
+                Ok(())
+            })
+            .await
+        {
+            error!("error on cleaning clients: {:?}", error)
+        };
     }
 }

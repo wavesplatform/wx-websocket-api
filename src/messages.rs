@@ -15,20 +15,14 @@ pub enum IncomeMessage {
     Unsubscribe { topic: ClientSubscriptionKey },
 }
 
-impl TryFrom<ws::Message> for IncomeMessage {
+impl TryFrom<&ws::Message> for IncomeMessage {
     type Error = crate::error::Error;
 
-    fn try_from(value: ws::Message) -> Result<Self, Self::Error> {
-        serde_json::from_slice(value.into_bytes().as_slice()).map_err(|e| match e.classify() {
+    fn try_from(value: &ws::Message) -> Result<Self, Self::Error> {
+        serde_json::from_slice(value.as_bytes()).map_err(|e| match e.classify() {
             serde_json::error::Category::Data => Error::UnknownIncomeMessage(e.to_string()),
             _ => Error::SerdeJsonError(e),
         })
-    }
-}
-
-impl From<IncomeMessage> for ws::Message {
-    fn from(m: IncomeMessage) -> Self {
-        ws::Message::text(serde_json::to_string(&m).unwrap())
     }
 }
 
