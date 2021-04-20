@@ -269,9 +269,10 @@ async fn handle_update(
     clients: &Clients,
     topics: &Topics,
 ) -> Result<(), Error> {
-    if let Some(client_ids) = topics.read().await.get_client_ids(&topic) {
+    let maybe_client_ids = topics.read().await.get_client_ids(&topic).cloned();
+    if let Some(client_ids) = maybe_client_ids {
         for client_id in client_ids {
-            if let Some(client) = clients.read().await.get(client_id) {
+            if let Some(client) = clients.read().await.get(&client_id) {
                 let mut client_lock = client.lock().await;
                 client_lock
                     .send_update(&topic, value.to_owned())
