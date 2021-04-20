@@ -29,7 +29,7 @@ pub fn start<R: Repo + 'static>(
 ) {
     let handle_connection_opts = websocket::HandleConnectionOptions {
         ping_interval: options.client_ping_interval,
-        ping_failures_threshold: options.client_ping_failures_threshold,
+        ping_failures_threshold: options.client_ping_failures_threshold as usize,
     };
 
     let routes = warp::path("ws")
