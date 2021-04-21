@@ -181,6 +181,7 @@ async fn handle_message<R: Repo>(
             if client_lock.contains_subscription(&topic) {
                 repo.unsubscribe(subscription_key.clone()).await?;
                 client_lock.remove_subscription(&topic);
+                topics.write().await.remove_subscription(&topic, client_id);
             }
 
             client_lock.send_unsubscribed(client_subscription_key)?;
@@ -271,10 +272,12 @@ async fn handle_update(
 ) -> Result<(), Error> {
     let maybe_client_ids = topics.read().await.get_client_ids(&topic).cloned();
     if let Some(client_ids) = maybe_client_ids {
+        let clients_lock = clients.read().await;
         for client_id in client_ids {
-            if let Some(client) = clients.read().await.get(&client_id) {
-                let mut client_lock = client.lock().await;
-                client_lock
+            if let Some(client) = clients_lock.get(&client_id) {
+                client
+                    .lock()
+                    .await
                     .send_update(&topic, value.to_owned())
                     .expect("error occured while sending message")
             }
