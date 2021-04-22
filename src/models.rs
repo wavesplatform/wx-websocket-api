@@ -1,15 +1,15 @@
-use crate::error::Error;
-use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use crate::client::ClientSubscriptionKey;
+use crate::error::{self, Error};
+use std::{convert::TryFrom, str::FromStr};
 use url::Url;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Topic {
     Config(ConfigParameters),
     State(State),
     TestResource(TestResource),
     BlockchainHeight,
+    Transaction(Transaction),
 }
 
 impl TryFrom<&str> for Topic {
@@ -32,8 +32,20 @@ impl TryFrom<&str> for Topic {
                 Ok(Topic::TestResource(ps))
             }
             Some("blockchain_height") => Ok(Topic::BlockchainHeight),
+            Some("transactions") => {
+                let transaction = Transaction::try_from(url)?;
+                Ok(Topic::Transaction(transaction))
+            }
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
+    }
+}
+
+impl TryFrom<&ClientSubscriptionKey> for Topic {
+    type Error = Error;
+
+    fn try_from(v: &ClientSubscriptionKey) -> Result<Self, Self::Error> {
+        Topic::try_from(v.0.as_str())
     }
 }
 
@@ -64,11 +76,33 @@ impl ToString for Topic {
                 url.set_host(Some("blockchain_height")).unwrap();
                 url.as_str().to_owned()
             }
+            Topic::Transaction(Transaction::ByAddress(transaction)) => {
+                url.set_host(Some("transactions")).unwrap();
+                url.set_query(Some(
+                    format!(
+                        "type={}&address={}",
+                        &transaction.tx_type, &transaction.address
+                    )
+                    .as_str(),
+                ));
+                url.as_str().to_owned()
+            }
+            Topic::Transaction(Transaction::Exchange(transaction)) => {
+                url.set_host(Some("transactions")).unwrap();
+                url.set_query(Some(
+                    format!(
+                        "type=exchange&amount_asset={}&price_asset={}",
+                        &transaction.amount_asset, &transaction.price_asset
+                    )
+                    .as_str(),
+                ));
+                url.as_str().to_owned()
+            }
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConfigFile {
     pub path: String,
 }
@@ -101,7 +135,7 @@ impl ToString for ConfigFile {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConfigParameters {
     pub file: ConfigFile,
 }
@@ -127,7 +161,7 @@ impl TryFrom<Url> for ConfigParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct State {
     pub address: String,
     pub key: String,
@@ -178,7 +212,7 @@ fn topic_state_test() {
     assert_eq!("some_address/some_key".to_string(), state_string);
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TestResource {
     pub path: String,
     pub query: Option<String>,
@@ -187,8 +221,8 @@ pub struct TestResource {
 impl ToString for TestResource {
     fn to_string(&self) -> String {
         let mut s = self.path.clone();
-        if let Some(query) = self.query.clone() {
-            s = format!("{}?{}", s, query).to_string();
+        if let Some(ref query) = self.query {
+            s = format!("{}?{}", s, query);
         }
         s
     }
@@ -212,5 +246,211 @@ impl TryFrom<Url> for BlockchainHeight {
 
     fn try_from(_value: Url) -> Result<Self, Self::Error> {
         Ok(Self {})
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Transaction {
+    ByAddress(TransactionByAddress),
+    Exchange(TransactionExchange),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TransactionExchange {
+    pub amount_asset: String,
+    pub price_asset: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TransactionByAddress {
+    pub tx_type: TransactionType,
+    pub address: String,
+}
+
+impl TryFrom<Url> for Transaction {
+    type Error = Error;
+
+    fn try_from(value: Url) -> Result<Self, Self::Error> {
+        if let Ok(raw_tx_type) = get_value_from_query(&value, "type") {
+            let tx_type = FromStr::from_str(raw_tx_type.as_str())?;
+            match tx_type {
+                TransactionType::Exchange => {
+                    if let Ok(tx) = TransactionExchange::try_from(value.clone()) {
+                        return Ok(Self::Exchange(tx));
+                    }
+                }
+                _ => (),
+            }
+        }
+        let tx = TransactionByAddress::try_from(value)?;
+        Ok(Self::ByAddress(tx))
+    }
+}
+
+impl TryFrom<Url> for TransactionByAddress {
+    type Error = Error;
+
+    fn try_from(value: Url) -> Result<Self, Self::Error> {
+        let tx_type = if let Ok(raw_tx_type) = get_value_from_query(&value, "type") {
+            FromStr::from_str(raw_tx_type.as_str())?
+        } else {
+            TransactionType::All
+        };
+        let address = get_value_from_query(&value, "address")?;
+        Ok(Self { address, tx_type })
+    }
+}
+
+impl TryFrom<Url> for TransactionExchange {
+    type Error = Error;
+
+    fn try_from(value: Url) -> Result<Self, Self::Error> {
+        let price_asset = get_value_from_query(&value, "price_asset")?;
+        let amount_asset = get_value_from_query(&value, "amount_asset")?;
+        Ok(Self {
+            price_asset,
+            amount_asset,
+        })
+    }
+}
+
+fn get_value_from_query(value: &Url, key: &str) -> Result<String, Error> {
+    value
+        .query_pairs()
+        .find_map(|(k, v)| {
+            if k == key && !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            Error::InvalidTransactionQuery(error::ErrorQuery(
+                value.query().map(ToString::to_string),
+            ))
+        })
+}
+
+#[test]
+fn transaction_topic_test() {
+    let url = Url::parse("topic://transactions?type=all&address=some_address").unwrap();
+    if let Transaction::ByAddress(transaction) = Transaction::try_from(url).unwrap() {
+        assert_eq!(transaction.tx_type.to_string(), "all".to_string());
+        assert_eq!(transaction.address, "some_address".to_string());
+        assert_eq!(
+            "topic://transactions?type=all&address=some_address".to_string(),
+            Topic::Transaction(Transaction::ByAddress(transaction)).to_string()
+        );
+    } else {
+        panic!("wrong transaction")
+    }
+    let url = Url::parse("topic://transactions?type=issue&address=some_other_address").unwrap();
+    if let Transaction::ByAddress(transaction) = Transaction::try_from(url).unwrap() {
+        assert_eq!(transaction.tx_type.to_string(), "issue".to_string());
+        assert_eq!(transaction.address, "some_other_address".to_string());
+        assert_eq!(
+            "topic://transactions?type=issue&address=some_other_address".to_string(),
+            Topic::Transaction(Transaction::ByAddress(transaction)).to_string()
+        );
+    }
+    let url = Url::parse("topic://transactions").unwrap();
+    let error = Transaction::try_from(url);
+    assert!(error.is_err());
+    assert_eq!(
+        format!("{}", error.unwrap_err()),
+        "InvalidTransactionQuery: None".to_string()
+    );
+    let url =
+        Url::parse("topic://transactions?type=exchange&amount_asset=asd&price_asset=qwe").unwrap();
+    if let Transaction::Exchange(transaction) = Transaction::try_from(url).unwrap() {
+        assert_eq!(transaction.amount_asset, "asd".to_string());
+        assert_eq!(transaction.price_asset, "qwe".to_string());
+        assert_eq!(
+            "topic://transactions?type=exchange&amount_asset=asd&price_asset=qwe".to_string(),
+            Topic::Transaction(Transaction::Exchange(transaction)).to_string()
+        );
+    } else {
+        panic!("wrong exchange transaction")
+    }
+    let url =
+        Url::parse("topic://transactions?type=exchange&amount_asset=asd&price_asset=").unwrap();
+    let error = Transaction::try_from(url);
+    assert!(error.is_err());
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TransactionType {
+    All,
+    Genesis,
+    Payment,
+    Issue,
+    Transfer,
+    Reissue,
+    Burn,
+    Exchange,
+    Lease,
+    LeaseCancel,
+    CreateAlias,
+    MassTransfer,
+    Data,
+    SetScript,
+    SponsorFee,
+    SetAssetScript,
+    InvokeScript,
+    UpdateAssetInfo,
+}
+
+impl std::fmt::Display for TransactionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::All => "all",
+            Self::Genesis => "genesis",
+            Self::Payment => "payment",
+            Self::Issue => "issue",
+            Self::Transfer => "transfer",
+            Self::Reissue => "reissue",
+            Self::Burn => "burn",
+            Self::Exchange => "exchange",
+            Self::Lease => "lease",
+            Self::LeaseCancel => "lease_cancel",
+            Self::CreateAlias => "alias",
+            Self::MassTransfer => "mass_transfer",
+            Self::Data => "data",
+            Self::SetScript => "set_script",
+            Self::SponsorFee => "sponsorship",
+            Self::SetAssetScript => "set_asset_script",
+            Self::InvokeScript => "invoke_script",
+            Self::UpdateAssetInfo => "update_asset_info",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl FromStr for TransactionType {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let transaction_type = match s {
+            "all" => Self::All,
+            "genesis" => Self::Genesis,
+            "payment" => Self::Payment,
+            "issue" => Self::Issue,
+            "transfer" => Self::Transfer,
+            "reissue" => Self::Reissue,
+            "burn" => Self::Burn,
+            "exchange" => Self::Exchange,
+            "lease" => Self::Lease,
+            "lease_cancel" => Self::LeaseCancel,
+            "alias" => Self::CreateAlias,
+            "mass_transfer" => Self::MassTransfer,
+            "data" => Self::Data,
+            "set_script" => Self::SetScript,
+            "sponsorship" => Self::SponsorFee,
+            "set_asset_script" => Self::SetAssetScript,
+            "invoke_script" => Self::InvokeScript,
+            "update_asset_info" => Self::UpdateAssetInfo,
+            _ => return Err(Error::InvalidTransactionType(s.to_string())),
+        };
+        Ok(transaction_type)
     }
 }
