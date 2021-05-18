@@ -49,26 +49,18 @@ impl RepoImpl {
 #[async_trait]
 impl Repo for RepoImpl {
     async fn get_connection_id(&self) -> Result<usize, Error> {
-        let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
-        let next_user_id = con.incr(CONNECTION_ID_KEY, 1).await.map(|v: usize| v)?;
+        let mut con = self.pool.get().await?;
+        let next_user_id: usize = con.incr(CONNECTION_ID_KEY, 1).await?;
         return Ok(next_user_id);
     }
 
     async fn subscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error> {
         let key = key.into();
-
-        let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
-
-        let exists = con.hexists(&self.subscriptions_key, key.clone()).await?;
-
-        if exists {
-            con.hincr(&self.subscriptions_key, key, 1)
-                .await
-                .map_err(|e| Error::from(e))?;
+        let mut con = self.pool.get().await?;
+        if con.hexists(&self.subscriptions_key, key.clone()).await? {
+            con.hincr(&self.subscriptions_key, key, 1).await?;
         } else {
-            con.hset(&self.subscriptions_key, key, 1)
-                .await
-                .map_err(|e| Error::from(e))?;
+            con.hset(&self.subscriptions_key, key, 1).await?;
         }
 
         Ok(())
@@ -76,17 +68,13 @@ impl Repo for RepoImpl {
 
     async fn unsubscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error> {
         let key = key.into();
-
-        let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
-
-        con.hincr(&self.subscriptions_key, key, -1)
-            .await
-            .map_err(|e| Error::from(e))
+        let mut con = self.pool.get().await?;
+        con.hincr(&self.subscriptions_key, key, -1).await?;
+        Ok(())
     }
 
     async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error> {
-        let mut con = self.pool.get().await.map_err(|e| Error::from(e))?;
-
-        con.get(key).await.map_err(|e| Error::from(e))
+        let mut con = self.pool.get().await?;
+        Ok(con.get(key).await?)
     }
 }

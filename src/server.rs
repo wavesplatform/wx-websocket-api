@@ -1,5 +1,6 @@
-use crate::client::Clients;
+use crate::client::{Clients, Topics};
 use crate::repo::Repo;
+use crate::shard::Sharded;
 use crate::websocket;
 use futures::future::FutureExt;
 use std::sync::Arc;
@@ -20,34 +21,34 @@ pub struct ServerOptions {
 pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    clients: Clients,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     options: ServerOptions,
 ) -> (
     tokio::sync::oneshot::Sender<()>,
     impl futures::Future<Output = ()>,
 ) {
-    let with_repo = warp::any().map(move || repo.clone());
-    let with_clients = warp::any().map(move || clients.clone());
-
     let handle_connection_opts = websocket::HandleConnectionOptions {
         ping_interval: options.client_ping_interval,
-        ping_failures_threshold: options.client_ping_failures_threshold,
+        ping_failures_threshold: options.client_ping_failures_threshold as usize,
     };
-    let with_opts = warp::any().map(move || handle_connection_opts.clone());
 
     let routes = warp::path("ws")
         .and(warp::path::end())
         .and(warp::ws())
-        .and(with_repo.clone())
-        .and(with_clients.clone())
-        .and(with_opts.clone())
+        .and(warp::any().map(move || repo.clone()))
+        .and(warp::any().map(move || clients.clone()))
+        .and(warp::any().map(move || topics.clone()))
+        .and(warp::any().map(move || handle_connection_opts.clone()))
         .and(warp::header::optional::<String>("x-request-id"))
-        .map(|ws: warp::ws::Ws, repo: Arc<R>, clients, opts, req_id| {
-            ws.on_upgrade(move |socket| {
-                websocket::handle_connection(socket, clients, repo, opts, req_id)
-                    .map(|result| result.expect("Cannot handle ws connection"))
-            })
-        })
+        .map(
+            |ws: warp::ws::Ws, repo: Arc<R>, clients, topics, opts, req_id| {
+                ws.on_upgrade(move |socket| {
+                    websocket::handle_connection(socket, clients, topics, repo, opts, req_id)
+                        .map(|result| result.expect("Cannot handle ws connection"))
+                })
+            },
+        )
         .with(warp::log::custom(access));
 
     info!("websocket server listening on :{}", server_port);
