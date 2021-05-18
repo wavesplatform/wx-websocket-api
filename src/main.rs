@@ -5,6 +5,7 @@ mod messages;
 mod models;
 mod repo;
 mod server;
+mod shard;
 mod transaction_updater;
 mod updater;
 mod websocket;
@@ -12,6 +13,7 @@ mod websocket;
 use bb8_redis::{bb8, RedisConnectionManager};
 use client::ClientsTrait;
 use error::Error;
+use futures::stream::{self, StreamExt};
 use models::Topic;
 use repo::RepoImpl;
 use std::sync::Arc;
@@ -38,8 +40,8 @@ async fn tokio_main() -> Result<(), Error> {
     let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_key);
     let repo = Arc::new(repo);
 
-    let clients = client::Clients::default();
-    let topics = client::Topics::default();
+    let clients = Arc::new(shard::Sharded::<client::Clients>::new(20));
+    let topics = Arc::new(shard::Sharded::<client::Topics>::new(20));
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel::<Topic>();
 
@@ -108,7 +110,13 @@ async fn tokio_main() -> Result<(), Error> {
     }
     let _ = server_stop_tx.send(());
     server_handler.await?;
-    clients.clean(repo).await;
+
+    stream::iter(&*clients)
+        .map(|shard| (shard, &repo))
+        .for_each_concurrent(20, |(shard, repo)| async move {
+            shard.clean(repo).await;
+        })
+        .await;
 
     Ok(())
 }

@@ -68,7 +68,12 @@ impl Client {
 
     pub fn handle_pong(&mut self, message_number: i64) -> Result<(), Error> {
         if self.pings.contains(&message_number) {
-            self.pings.clear();
+            self.pings = self
+                .pings
+                .iter()
+                .filter(|&&x| x > message_number)
+                .cloned()
+                .collect();
             Ok(())
         } else {
             // client sent invalid pong message
@@ -165,10 +170,10 @@ impl Client {
     }
 }
 
-pub type Clients = Arc<RwLock<HashMap<ClientId, Arc<Mutex<Client>>>>>;
-pub type Topics = Arc<RwLock<ClientIdsByTopics>>;
+pub type Clients = RwLock<HashMap<ClientId, Arc<Mutex<Client>>>>;
+pub type Topics = RwLock<ClientIdsByTopics>;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ClientIdsByTopics(HashMap<Topic, HashSet<ClientId>>);
 
 impl ClientIdsByTopics {
@@ -198,19 +203,23 @@ impl ClientIdsByTopics {
 
 #[async_trait]
 pub trait ClientsTrait {
-    async fn clean<R: Repo>(&self, repo: Arc<R>);
+    async fn clean<R: Repo>(&self, repo: &Arc<R>);
 }
 
 #[async_trait]
 impl ClientsTrait for Clients {
-    async fn clean<R: Repo>(&self, repo: Arc<R>) {
+    async fn clean<R: Repo>(&self, repo: &Arc<R>) {
         if let Err(error) = stream::iter(self.write().await.iter_mut())
-            .map(|(_client_id, client)| Ok::<_, Error>((client, repo.clone())))
+            .map(|(_client_id, client)| Ok::<_, Error>((client, &repo)))
             .try_for_each_concurrent(10, |(client, repo)| async move {
-                for (topic, _subscription_key) in client.lock().await.subscriptions.iter() {
-                    let subscription_key = topic.to_string();
-                    repo.unsubscribe(subscription_key).await?;
-                }
+                stream::iter(client.lock().await.subscriptions_iter())
+                    .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, repo)))
+                    .try_for_each_concurrent(10, |(topic, repo)| async move {
+                        let subscription_key = topic.to_string();
+                        repo.unsubscribe(subscription_key).await?;
+                        Ok(())
+                    })
+                    .await?;
                 Ok(())
             })
             .await

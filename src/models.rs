@@ -297,7 +297,7 @@ impl TryFrom<Url> for TransactionByAddress {
             TransactionType::All
         };
         let address = get_value_from_query(&value, "address")?;
-        Ok(Self { address, tx_type })
+        Ok(Self { tx_type, address })
     }
 }
 
@@ -308,8 +308,8 @@ impl TryFrom<Url> for TransactionExchange {
         let price_asset = get_value_from_query(&value, "price_asset")?;
         let amount_asset = get_value_from_query(&value, "amount_asset")?;
         Ok(Self {
-            price_asset,
             amount_asset,
+            price_asset,
         })
     }
 }

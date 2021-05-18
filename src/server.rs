@@ -1,5 +1,6 @@
 use crate::client::{Clients, Topics};
 use crate::repo::Repo;
+use crate::shard::Sharded;
 use crate::websocket;
 use futures::future::FutureExt;
 use std::sync::Arc;
@@ -20,8 +21,8 @@ pub struct ServerOptions {
 pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    clients: Clients,
-    topics: Topics,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     options: ServerOptions,
 ) -> (
     tokio::sync::oneshot::Sender<()>,

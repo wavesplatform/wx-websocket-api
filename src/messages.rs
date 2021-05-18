@@ -16,7 +16,7 @@ pub enum IncomeMessage {
 }
 
 impl TryFrom<&ws::Message> for IncomeMessage {
-    type Error = crate::error::Error;
+    type Error = Error;
 
     fn try_from(value: &ws::Message) -> Result<Self, Self::Error> {
         serde_json::from_slice(value.as_bytes()).map_err(|e| match e.classify() {

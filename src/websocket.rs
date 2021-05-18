@@ -3,7 +3,8 @@ use crate::error::Error;
 use crate::messages::IncomeMessage;
 use crate::models::Topic;
 use crate::repo::Repo;
-use futures::{SinkExt, StreamExt};
+use crate::shard::Sharded;
+use futures::{stream, SinkExt, StreamExt, TryStreamExt};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -22,13 +23,13 @@ pub struct HandleConnectionOptions {
 
 pub async fn handle_connection<R: Repo>(
     socket: ws::WebSocket,
-    clients: Clients,
-    topics: Topics,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     request_id: Option<String>,
 ) -> Result<(), Error> {
-    let client_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
+    let client_id = repo.get_connection_id().await?;
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Arc::new(Mutex::new(Client::new(
@@ -36,7 +37,11 @@ pub async fn handle_connection<R: Repo>(
         request_id.clone(),
     )));
 
-    clients.write().await.insert(client_id, client.clone());
+    clients
+        .get(&client_id)
+        .write()
+        .await
+        .insert(client_id, client.clone());
 
     // ws connection messages processing
     run(
@@ -54,7 +59,7 @@ async fn run<R: Repo>(
     mut socket: ws::WebSocket,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    topics: &Topics,
+    topics: &Arc<Sharded<Topics>>,
     repo: &Arc<R>,
     options: HandleConnectionOptions,
     mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
@@ -80,7 +85,7 @@ async fn run<R: Repo>(
                         break;
                     }
 
-                    if let Err(_) = match handle_message(repo, client, client_id, topics, &msg).await {
+                    if match handle_message(repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {}", error);
@@ -100,7 +105,7 @@ async fn run<R: Repo>(
                             break;
                         }
                         _ => Ok(())
-                    } {
+                    }.is_err() {
                         error!("error occured while sending message to client");
                         break;
                     }
@@ -108,15 +113,14 @@ async fn run<R: Repo>(
             },
             // outcome message (to ws)
             msg = client_rx.recv() => {
-                match msg {
-                    Some(message) => {
-                        if let Err(err) = socket.send(message).await {
-                            let request_id = client.lock().await.get_request_id().clone();
-                            error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
-                            break;
-                        }
+                if let Some(message) = msg {
+                    if let Err(err) = socket.send(message).await {
+                        let request_id = client.lock().await.get_request_id().clone();
+                        error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
+                        break;
                     }
-                    None => break
+                } else {
+                    break;
                 }
             }
             // ping
@@ -126,11 +130,10 @@ async fn run<R: Repo>(
                 if client_lock.pings_len() >= options.ping_failures_threshold {
                     info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
                     break;
-                } else {
-                    if let Err(error) = client_lock.send_ping() {
-                        error!("error occured while sending ping message to client: {:?}", error);
-                        break;
-                    }
+                }
+                if let Err(error) = client_lock.send_ping() {
+                    error!("error occured while sending ping message to client: {:?}", error);
+                    break;
                 }
             },
         }
@@ -141,25 +144,25 @@ async fn handle_message<R: Repo>(
     repo: &Arc<R>,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    topics: &Topics,
+    topics: &Arc<Sharded<Topics>>,
     raw_msg: &ws::Message,
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(raw_msg)?;
-    let mut client_lock = client.lock().await;
 
     match msg {
-        IncomeMessage::Pong(pong) => client_lock.handle_pong(pong.message_number),
+        IncomeMessage::Pong(pong) => client.lock().await.handle_pong(pong.message_number),
         IncomeMessage::Subscribe {
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
             let subscription_key = topic.to_string();
+            let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
                 let message = "You are already subscribed for the specified topic".to_string();
                 client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
             } else {
-                let mut topics_lock = topics.write().await;
+                let mut topics_lock = topics.get(&topic).write().await;
                 repo.subscribe(subscription_key.clone()).await?;
                 client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
@@ -177,11 +180,16 @@ async fn handle_message<R: Repo>(
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
             let subscription_key = topic.to_string();
+            let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
                 repo.unsubscribe(subscription_key.clone()).await?;
                 client_lock.remove_subscription(&topic);
-                topics.write().await.remove_subscription(&topic, client_id);
+                topics
+                    .get(&topic)
+                    .write()
+                    .await
+                    .remove_subscription(&topic, client_id);
             }
 
             client_lock.send_unsubscribed(client_subscription_key)?;
@@ -209,15 +217,29 @@ async fn on_disconnect<R: Repo>(
     repo: Arc<R>,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
-    clients: Clients,
-    topics: Topics,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
     let client_lock = client.lock().await;
-    let mut topics_lock = topics.write().await;
-    for (topic, _subscription_key) in client_lock.subscriptions_iter() {
-        repo.unsubscribe(topic.to_string()).await?;
-        topics_lock.remove_subscription(&topic, &client_id);
-    }
+    // remove topics from Topics
+    stream::iter(client_lock.subscriptions_iter())
+        .map(|(topic, _)| (topic, &topics))
+        .for_each_concurrent(20, |(topic, topics)| async move {
+            topics
+                .get(&topic)
+                .write()
+                .await
+                .remove_subscription(topic, &client_id);
+        })
+        .await;
+    // unsubscribing all topics from repo
+    stream::iter(client_lock.subscriptions_iter())
+        .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, &repo)))
+        .try_for_each_concurrent(10, |(topic, repo)| async move {
+            repo.unsubscribe(topic.to_string()).await?;
+            Ok(())
+        })
+        .await?;
 
     info!(
         "client #{} disconnected; he got {} messages",
@@ -226,7 +248,7 @@ async fn on_disconnect<R: Repo>(
         "req_id" => client_lock.get_request_id().clone()
     );
 
-    clients.write().await.remove(&client_id);
+    clients.get(&client_id).write().await.remove(&client_id);
 
     Ok(())
 }
@@ -234,8 +256,8 @@ async fn on_disconnect<R: Repo>(
 pub async fn updates_handler<R: Repo>(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
     repo: Arc<R>,
-    clients: Clients,
-    topics: Topics,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
     while let Some(topic) = updates_receiver.recv().await {
         let subscription_key = topic.to_string();
@@ -243,7 +265,7 @@ pub async fn updates_handler<R: Repo>(
         if let Some(value) = repo
             .get_by_key(subscription_key.as_ref())
             .await
-            .expect(&format!("Cannot get value by key {}", subscription_key))
+            .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
         {
             handle_update(topic, value, &clients, &topics).await?
         }
@@ -254,8 +276,8 @@ pub async fn updates_handler<R: Repo>(
 
 pub async fn transactions_updates_handler(
     mut transaction_updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Clients,
-    topics: Topics,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
     while let Some((topic, value)) = transaction_updates_receiver.recv().await {
         handle_update(topic, value, &clients, &topics).await?
@@ -267,14 +289,18 @@ pub async fn transactions_updates_handler(
 async fn handle_update(
     topic: Topic,
     value: String,
-    clients: &Clients,
-    topics: &Topics,
+    clients: &Arc<Sharded<Clients>>,
+    topics: &Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
-    let maybe_client_ids = topics.read().await.get_client_ids(&topic).cloned();
+    let maybe_client_ids = topics
+        .get(&topic)
+        .read()
+        .await
+        .get_client_ids(&topic)
+        .cloned();
     if let Some(client_ids) = maybe_client_ids {
-        let clients_lock = clients.read().await;
         for client_id in client_ids {
-            if let Some(client) = clients_lock.get(&client_id) {
+            if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
                 client
                     .lock()
                     .await
