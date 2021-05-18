@@ -1,13 +1,13 @@
-use crate::client::{Client, ClientId, Clients};
+use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
-use crate::messages::{IncomeMessage, OutcomeMessage};
+use crate::messages::IncomeMessage;
 use crate::models::Topic;
 use crate::repo::Repo;
-use futures::{future::try_join_all, SinkExt, StreamExt};
-use std::collections::HashSet;
+use crate::shard::Sharded;
+use futures::{stream, SinkExt, StreamExt, TryStreamExt};
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::Mutex;
 use warp::ws;
 use wavesexchange_log::{error, info};
 
@@ -18,140 +18,82 @@ const INVALID_TOPIC_ERROR_CODE: u16 = 3;
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
     pub ping_interval: tokio::time::Duration,
-    pub ping_failures_threshold: u16,
+    pub ping_failures_threshold: usize,
 }
 
 pub async fn handle_connection<R: Repo>(
     socket: ws::WebSocket,
-    clients: Clients,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     request_id: Option<String>,
 ) -> Result<(), Error> {
-    let client_id = repo.get_connection_id().await.map_err(|e| Error::from(e))?;
+    let client_id = repo.get_connection_id().await?;
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let client = Client {
-        sender: client_tx.clone(),
-        subscriptions: HashSet::new(),
-        new_subscriptions: HashSet::new(),
-        message_counter: 1,
-        request_id: request_id.clone(),
-        pings: vec![],
-    };
+    let client = Arc::new(Mutex::new(Client::new(
+        client_tx.clone(),
+        request_id.clone(),
+    )));
 
-    clients.write().await.insert(client_id, client);
-
-    let (client_disconnect_signal_sender, _) = tokio::sync::broadcast::channel::<()>(1);
-
-    let pinger_failure_signal_sender = client_disconnect_signal_sender.clone();
-    {
-        let clients = clients.clone();
-        let client_id = client_id.clone();
-        let client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
-        // pinging
-        tokio::task::spawn(async move {
-            pinging(
-                clients,
-                client_id,
-                client_disconnect_signal_receiver,
-                pinger_failure_signal_sender,
-                options,
-            )
-            .await
-        });
-    }
+    clients
+        .get(&client_id)
+        .write()
+        .await
+        .insert(client_id, client.clone());
 
     // ws connection messages processing
-    let client_disconnect_signal_receiver = client_disconnect_signal_sender.subscribe();
-    messages_processing(
-        socket,
-        clients.clone(),
-        client_id,
-        repo.clone(),
-        client_disconnect_signal_receiver,
-        client_rx,
+    run(
+        socket, &client, &client_id, &topics, &repo, options, client_rx,
     )
     .await;
 
     // handle connection close
-    on_disconnect(repo, &client_id, clients, client_disconnect_signal_sender).await?;
+    on_disconnect(repo, client, client_id, clients, topics).await?;
 
     Ok(())
 }
 
-async fn pinging(
-    clients: Clients,
-    client_id: ClientId,
-    mut client_disconnect_signal_receiver: Receiver<()>,
-    pinger_failure_signal_sender: Sender<()>,
+async fn run<R: Repo>(
+    mut socket: ws::WebSocket,
+    client: &Arc<Mutex<Client>>,
+    client_id: &ClientId,
+    topics: &Arc<Sharded<Topics>>,
+    repo: &Arc<R>,
     options: HandleConnectionOptions,
+    mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
 ) {
     let mut interval = tokio::time::interval(options.ping_interval);
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                let mut clients_lock = clients.write().await;
-                let client = clients_lock
-                    .get_mut(&client_id)
-                    .expect(&format!("Unknown client_id: {}", client_id));
-
-                if client.pings.len() >= options.ping_failures_threshold as usize {
-                    info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
-
-                    pinger_failure_signal_sender.send(())
-                        .expect("error occured while client disconnecting, because of ping failure");
-                    break;
-                } else {
-                    client.pings.push(client.message_counter);
-                    let message = OutcomeMessage::Ping { message_number: client.message_counter };
-                    client.send(message).expect("error occured while sending message to client");
-                }
-            },
-            _ = client_disconnect_signal_receiver.recv() => {
-                info!("got the client disconnect signal: stop the pinger task");
-                break;
-            }
-        }
-    }
-}
-
-async fn messages_processing<R: Repo>(
-    mut socket: warp::ws::WebSocket,
-    clients: Clients,
-    client_id: ClientId,
-    repo: Arc<R>,
-    mut client_disconnect_signal_receiver: Receiver<()>,
-    mut client_rx: tokio::sync::mpsc::UnboundedReceiver<warp::ws::Message>,
-) {
-    loop {
-        tokio::select! {
+            // income message (from ws)
             next_message = socket.next() => {
                 if let Some(next_msg_result) = next_message {
                     let msg = match next_msg_result {
                         Ok(msg) => msg,
                         Err(disconnected) => {
-                            let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
+                            let request_id = client.lock().await.get_request_id().clone();
                             info!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
-                        let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
+                        let request_id = client.lock().await.get_request_id().clone();
                         info!("client #{} connection was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
-                    match on_message(repo.clone(), &clients, &client_id, msg).await {
-                        Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, &clients, &client_id).await,
+                    if match handle_message(repo, client, client_id, topics, &msg).await {
+                        Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {}", error);
-                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::UrlParseError(error)) => {
                             let error = format!("Invalid topic format: {:?}", error);
-                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, &clients, &client_id).await
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::InvalidPongMessage) => {
                             // nothing to do
@@ -162,102 +104,95 @@ async fn messages_processing<R: Repo>(
                             error!("error occured while processing message: {:?}", err);
                             break;
                         }
-                        _ => ()
+                        _ => Ok(())
+                    }.is_err() {
+                        error!("error occured while sending message to client");
+                        break;
                     }
                 }
             },
+            // outcome message (to ws)
             msg = client_rx.recv() => {
-                match msg {
-                    Some(message) => {
-                        if let Err(err) = socket.send(message).await {
-                            let request_id = clients.read().await.get(&client_id).expect(&format!("Unknown client_id: {}", client_id)).request_id.clone();
-                            error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
-                            break;
-                        }
+                if let Some(message) = msg {
+                    if let Err(err) = socket.send(message).await {
+                        let request_id = client.lock().await.get_request_id().clone();
+                        error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
+                        break;
                     }
-                    None => break
+                } else {
+                    break;
                 }
             }
-            _ = client_disconnect_signal_receiver.recv() => {
-                info!("got the client disconnect signal: stop the messages processing");
-                break;
-            }
+            // ping
+            _ = interval.tick() => {
+                let mut client_lock = client.lock().await;
 
+                if client_lock.pings_len() >= options.ping_failures_threshold {
+                    info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
+                    break;
+                }
+                if let Err(error) = client_lock.send_ping() {
+                    error!("error occured while sending ping message to client: {:?}", error);
+                    break;
+                }
+            },
         }
     }
 }
 
-async fn on_message<R: Repo>(
-    repo: Arc<R>,
-    clients: &Clients,
+async fn handle_message<R: Repo>(
+    repo: &Arc<R>,
+    client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    raw_msg: ws::Message,
+    topics: &Arc<Sharded<Topics>>,
+    raw_msg: &ws::Message,
 ) -> Result<(), Error> {
-    let msg = IncomeMessage::try_from(raw_msg.clone())?;
-
-    let mut clients_lock = clients.write().await;
-    let client = clients_lock
-        .get_mut(client_id)
-        .expect(&format!("Unknown client_id: {}", client_id));
+    let msg = IncomeMessage::try_from(raw_msg)?;
 
     match msg {
-        IncomeMessage::Pong(pong) => {
-            if client.pings.contains(&pong.message_number) {
-                client.pings.clear();
-                Ok(())
-            } else {
-                // client sent invalid pong message
-                info!("got invalid pong message: {:?}", raw_msg);
-                Err(Error::InvalidPongMessage)
-            }
-        }
+        IncomeMessage::Pong(pong) => client.lock().await.handle_pong(pong.message_number),
         IncomeMessage::Subscribe {
-            topic: subscription_key,
+            topic: client_subscription_key,
         } => {
-            // just for subscription key validation
-            let _topic = Topic::try_from(subscription_key.as_str())?;
+            let topic = Topic::try_from(&client_subscription_key)?;
+            let subscription_key = topic.to_string();
+            let mut client_lock = client.lock().await;
 
-            if client.subscriptions.contains(&subscription_key) {
-                let message = OutcomeMessage::Error {
-                    code: ALREADY_SUBSCRIBED_ERROR_CODE,
-                    message: "You are already subscribed for the specified topic".to_string(),
-                    details: None,
-                    message_number: client.message_counter,
-                };
-                client.send(message)?;
+            if client_lock.contains_subscription(&topic) {
+                let message = "You are already subscribed for the specified topic".to_string();
+                client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
             } else {
+                let mut topics_lock = topics.get(&topic).write().await;
                 repo.subscribe(subscription_key.clone()).await?;
-                client.subscriptions.insert(subscription_key.clone());
+                client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                    let message = OutcomeMessage::Subscribed {
-                        message_number: client.message_counter,
-                        topic: subscription_key,
-                        value,
-                    };
-                    client.send(message)?;
+                    client_lock.send_subscribed(client_subscription_key, value)?;
                 } else {
-                    client.new_subscriptions.insert(subscription_key);
+                    client_lock.add_new_subscription(topic.clone());
                 }
+                topics_lock.add_subscription(topic, *client_id);
             }
 
             Ok(())
         }
         IncomeMessage::Unsubscribe {
-            topic: subscription_key,
+            topic: client_subscription_key,
         } => {
-            // just for subscription key validation
-            let _topic = Topic::try_from(subscription_key.as_str())?;
+            let topic = Topic::try_from(&client_subscription_key)?;
+            let subscription_key = topic.to_string();
+            let mut client_lock = client.lock().await;
 
-            if client.subscriptions.contains(&subscription_key) {
+            if client_lock.contains_subscription(&topic) {
                 repo.unsubscribe(subscription_key.clone()).await?;
-                client.subscriptions.remove(&subscription_key);
+                client_lock.remove_subscription(&topic);
+                topics
+                    .get(&topic)
+                    .write()
+                    .await
+                    .remove_subscription(&topic, client_id);
             }
 
-            let message = OutcomeMessage::Unsubscribed {
-                message_number: client.message_counter,
-                topic: subscription_key,
-            };
-            client.send(message)?;
+            client_lock.send_unsubscribed(client_subscription_key)?;
 
             Ok(())
         }
@@ -268,93 +203,111 @@ async fn send_error(
     error: impl Into<String>,
     message: impl Into<String>,
     code: u16,
-    clients: &Clients,
-    client_id: &ClientId,
-) {
-    let mut clients_lock = clients.write().await;
-    let client = clients_lock
-        .get_mut(client_id)
-        .expect(&format!("Unknown client_id: {}", client_id));
-
+    client: &Arc<Mutex<Client>>,
+) -> Result<(), Error> {
     let mut error_details = std::collections::HashMap::new();
     error_details.insert("reason".to_string(), error.into());
-    let message = OutcomeMessage::Error {
-        message_number: client.message_counter,
-        code,
-        message: message.into(),
-        details: Some(error_details),
-    };
     client
-        .send(message)
-        .expect("error occured while sending message to client");
+        .lock()
+        .await
+        .send_error(code, message.into(), Some(error_details))
 }
 
 async fn on_disconnect<R: Repo>(
     repo: Arc<R>,
-    client_id: &ClientId,
-    clients: Clients,
-    client_disconnect_signal_sender: Sender<()>,
+    client: Arc<Mutex<Client>>,
+    client_id: ClientId,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
-    if let Some(client) = clients.read().await.get(client_id) {
-        let fs = client
-            .subscriptions
-            .iter()
-            .map(|subscription_key| repo.unsubscribe(subscription_key));
+    let client_lock = client.lock().await;
+    // remove topics from Topics
+    stream::iter(client_lock.subscriptions_iter())
+        .map(|(topic, _)| (topic, &topics))
+        .for_each_concurrent(20, |(topic, topics)| async move {
+            topics
+                .get(&topic)
+                .write()
+                .await
+                .remove_subscription(topic, &client_id);
+        })
+        .await;
+    // unsubscribing all topics from repo
+    stream::iter(client_lock.subscriptions_iter())
+        .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, &repo)))
+        .try_for_each_concurrent(10, |(topic, repo)| async move {
+            repo.unsubscribe(topic.to_string()).await?;
+            Ok(())
+        })
+        .await?;
 
-        try_join_all(fs).await?;
+    info!(
+        "client #{} disconnected; he got {} messages",
+        client_id,
+        client_lock.messages_count();
+        "req_id" => client_lock.get_request_id().clone()
+    );
 
-        info!(
-            "client #{} disconnected; he got {} messages",
-            client_id,
-            client.message_counter - 1;
-            "req_id" => client.request_id.clone()
-        );
-    }
-
-    clients.write().await.remove(client_id);
-
-    let _ = client_disconnect_signal_sender.send(());
+    clients.get(&client_id).write().await.remove(&client_id);
 
     Ok(())
 }
 
 pub async fn updates_handler<R: Repo>(
-    updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
+    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
     repo: Arc<R>,
-    clients: Clients,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> Result<(), Error> {
-    let mut updates_receiver = updates_receiver;
     while let Some(topic) = updates_receiver.recv().await {
-        let topic_encoded = topic.to_string();
+        let subscription_key = topic.to_string();
 
         if let Some(value) = repo
-            .get_by_key(topic_encoded.as_ref())
+            .get_by_key(subscription_key.as_ref())
             .await
-            .expect(&format!("Cannot get value by key {}", topic_encoded))
+            .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
         {
-            for (_, client) in clients.write().await.iter_mut() {
-                let subscription_key = topic_encoded.clone();
-                if client.subscriptions.contains(&subscription_key) {
-                    let message = if client.new_subscriptions.remove(&subscription_key) {
-                        OutcomeMessage::Subscribed {
-                            message_number: client.message_counter,
-                            topic: subscription_key,
-                            value: value.clone(),
-                        }
-                    } else {
-                        OutcomeMessage::Update {
-                            message_number: client.message_counter,
-                            topic: subscription_key,
-                            value: value.clone(),
-                        }
-                    };
-                    if let Err(err) = client.send(message) {
-                        info!("error occured while sending message: {:?}", err)
-                    }
-                }
-            }
+            handle_update(topic, value, &clients, &topics).await?
         }
     }
 
+    Ok(())
+}
+
+pub async fn transactions_updates_handler(
+    mut transaction_updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
+) -> Result<(), Error> {
+    while let Some((topic, value)) = transaction_updates_receiver.recv().await {
+        handle_update(topic, value, &clients, &topics).await?
+    }
+
+    Ok(())
+}
+
+async fn handle_update(
+    topic: Topic,
+    value: String,
+    clients: &Arc<Sharded<Clients>>,
+    topics: &Arc<Sharded<Topics>>,
+) -> Result<(), Error> {
+    let maybe_client_ids = topics
+        .get(&topic)
+        .read()
+        .await
+        .get_client_ids(&topic)
+        .cloned();
+    if let Some(client_ids) = maybe_client_ids {
+        for client_id in client_ids {
+            if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
+                client
+                    .lock()
+                    .await
+                    .send_update(&topic, value.to_owned())
+                    .expect("error occured while sending message")
+            }
+        }
+    }
     Ok(())
 }

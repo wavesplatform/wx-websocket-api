@@ -1,4 +1,5 @@
-use crate::{error::Error, models::Topic};
+use crate::error::Error;
+use crate::models::Topic;
 use std::convert::TryFrom;
 use wavesexchange_log::error;
 
@@ -6,25 +7,23 @@ use wavesexchange_log::error;
 // https://redis.io/topics/notifications
 pub fn run(
     redis_client: redis::Client,
-    updates_sender: tokio::sync::mpsc::UnboundedSender<Topic>,
+    transaction_updates_sender: tokio::sync::mpsc::UnboundedSender<(Topic, String)>,
 ) -> Result<(), Error> {
     'base: loop {
         let mut conn = redis_client.get_connection()?;
         let mut pubsub = conn.as_pubsub();
         pubsub.set_read_timeout(Some(std::time::Duration::from_secs(240)))?;
-        pubsub.psubscribe("__keyevent*__:*")?;
+        pubsub.psubscribe("topic://transactions*")?;
         loop {
             match pubsub.get_message() {
                 Ok(msg) => {
-                    if let Ok(update) = msg.get_payload::<String>() {
-                        if let Ok(topic) = Topic::try_from(update.as_str()) {
-                            if let Topic::Transaction(_) = topic {
-                                continue;
-                            }
-                            if let Err(err) = updates_sender.send(topic) {
-                                error!("error occured while sending resource update: {:?}", err);
-                                break 'base;
-                            }
+                    if let Ok(topic @ Topic::Transaction(_)) =
+                        Topic::try_from(msg.get_channel_name())
+                    {
+                        let value = msg.get_payload::<String>()?;
+                        if let Err(err) = transaction_updates_sender.send((topic, value)) {
+                            error!("error occured while sending resource update: {:?}", err);
+                            break 'base;
                         }
                     }
                 }
