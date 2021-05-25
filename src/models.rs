@@ -10,6 +10,7 @@ pub enum Topic {
     TestResource(TestResource),
     BlockchainHeight,
     Transaction(Transaction),
+    LeasingBalance(LeasingBalance),
 }
 
 impl TryFrom<&str> for Topic {
@@ -35,6 +36,10 @@ impl TryFrom<&str> for Topic {
             Some("transactions") => {
                 let transaction = Transaction::try_from(url)?;
                 Ok(Topic::Transaction(transaction))
+            }
+            Some("leasing_balance") => {
+                let leasing_balance = LeasingBalance::try_from(url)?;
+                Ok(Topic::LeasingBalance(leasing_balance))
             }
             _ => Err(Error::InvalidTopic(s.to_owned())),
         }
@@ -95,6 +100,13 @@ impl ToString for Topic {
                         &transaction.amount_asset, &transaction.price_asset
                     )
                     .as_str(),
+                ));
+                url.as_str().to_owned()
+            }
+            Topic::LeasingBalance(leasing_balance) => {
+                url.set_host(Some("leasing_balance")).unwrap();
+                url.set_query(Some(
+                    format!("address={}", leasing_balance.address).as_str(),
                 ));
                 url.as_str().to_owned()
             }
@@ -452,5 +464,41 @@ impl FromStr for TransactionType {
             _ => return Err(Error::InvalidTransactionType(s.to_string())),
         };
         Ok(transaction_type)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LeasingBalance {
+    pub address: String,
+}
+
+impl ToString for LeasingBalance {
+    fn to_string(&self) -> String {
+        format!("address={}", self.address)
+    }
+}
+
+impl TryFrom<Url> for LeasingBalance {
+    type Error = Error;
+
+    fn try_from(url: Url) -> Result<Self, Self::Error> {
+        let mut address = None;
+        for (k, v) in url.query_pairs() {
+            if k == "address" {
+                address =
+                    Some(v.parse().map_err(|_| {
+                        Error::InvalidLeaseQuery(url.query().unwrap_or("").to_string())
+                    })?)
+            }
+        }
+        if address.is_none() {
+            return Err(Error::InvalidLeaseQuery(
+                url.query().unwrap_or("").to_string(),
+            ));
+        } else {
+            Ok(Self {
+                address: address.unwrap(),
+            })
+        }
     }
 }
