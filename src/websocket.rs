@@ -22,7 +22,7 @@ pub struct HandleConnectionOptions {
 }
 
 pub async fn handle_connection<R: Repo>(
-    socket: ws::WebSocket,
+    mut socket: ws::WebSocket,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
@@ -45,18 +45,24 @@ pub async fn handle_connection<R: Repo>(
 
     // ws connection messages processing
     run(
-        socket, &client, &client_id, &topics, &repo, options, client_rx,
+        &mut socket,
+        &client,
+        &client_id,
+        &topics,
+        &repo,
+        options,
+        client_rx,
     )
     .await;
 
     // handle connection close
-    on_disconnect(repo, client, client_id, clients, topics).await?;
+    on_disconnect(socket, repo, client, client_id, clients, topics).await?;
 
     Ok(())
 }
 
 async fn run<R: Repo>(
-    mut socket: ws::WebSocket,
+    socket: &mut ws::WebSocket,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
     topics: &Arc<Sharded<Topics>>,
@@ -214,6 +220,7 @@ async fn send_error(
 }
 
 async fn on_disconnect<R: Repo>(
+    socket: ws::WebSocket,
     repo: Arc<R>,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
@@ -249,6 +256,7 @@ async fn on_disconnect<R: Repo>(
     );
 
     clients.get(&client_id).write().await.remove(&client_id);
+    socket.close().await?;
 
     Ok(())
 }
