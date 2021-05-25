@@ -1,6 +1,6 @@
 use crate::{error::Error, models::Topic};
 use std::convert::TryFrom;
-use wavesexchange_log::error;
+use wavesexchange_log::info;
 
 // NB: redis server has to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
@@ -8,10 +8,10 @@ pub fn run(
     redis_client: redis::Client,
     updates_sender: tokio::sync::mpsc::UnboundedSender<Topic>,
 ) -> Result<(), Error> {
-    'base: loop {
+    loop {
         let mut conn = redis_client.get_connection()?;
         let mut pubsub = conn.as_pubsub();
-        pubsub.set_read_timeout(Some(std::time::Duration::from_secs(240)))?;
+        pubsub.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
         pubsub.psubscribe("__keyevent*__:*")?;
         loop {
             match pubsub.get_message() {
@@ -21,16 +21,16 @@ pub fn run(
                             if let Topic::Transaction(_) = topic {
                                 continue;
                             }
-                            if let Err(err) = updates_sender.send(topic) {
-                                error!("error occured while sending resource update: {:?}", err);
-                                break 'base;
-                            }
+                            updates_sender
+                                .send(topic)
+                                .expect("error occured while sending resource update")
                         }
                     }
                 }
                 Err(error) => {
                     // error when socket don't response in time
                     if error.to_string().contains("os error 11") {
+                        info!("updater don't get new events, reopen connection");
                         break;
                     }
                     return Err(error.into());
@@ -38,6 +38,4 @@ pub fn run(
             }
         }
     }
-
-    Ok(())
 }

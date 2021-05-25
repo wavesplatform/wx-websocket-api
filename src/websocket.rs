@@ -266,7 +266,7 @@ pub async fn updates_handler<R: Repo>(
     repo: Arc<R>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
-) -> Result<(), Error> {
+) {
     while let Some(topic) = updates_receiver.recv().await {
         let subscription_key = topic.to_string();
 
@@ -275,23 +275,19 @@ pub async fn updates_handler<R: Repo>(
             .await
             .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
         {
-            handle_update(topic, value, &clients, &topics).await?
+            handle_update(topic, value, &clients, &topics).await
         }
     }
-
-    Ok(())
 }
 
 pub async fn transactions_updates_handler(
     mut transaction_updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
-) -> Result<(), Error> {
+) {
     while let Some((topic, value)) = transaction_updates_receiver.recv().await {
-        handle_update(topic, value, &clients, &topics).await?
+        handle_update(topic, value, &clients, &topics).await
     }
-
-    Ok(())
 }
 
 async fn handle_update(
@@ -299,7 +295,7 @@ async fn handle_update(
     value: String,
     clients: &Arc<Sharded<Clients>>,
     topics: &Arc<Sharded<Topics>>,
-) -> Result<(), Error> {
+) {
     let maybe_client_ids = topics
         .get(&topic)
         .read()
@@ -317,5 +313,4 @@ async fn handle_update(
             }
         }
     }
-    Ok(())
 }
