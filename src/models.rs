@@ -491,14 +491,12 @@ impl TryFrom<Url> for LeasingBalance {
                     })?)
             }
         }
-        if address.is_none() {
+        if let Some(address) = address {
+            Ok(Self { address })
+        } else {
             return Err(Error::InvalidLeaseQuery(
                 url.query().unwrap_or("").to_string(),
             ));
-        } else {
-            Ok(Self {
-                address: address.unwrap(),
-            })
         }
     }
 }
