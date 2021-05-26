@@ -483,20 +483,15 @@ impl TryFrom<Url> for LeasingBalance {
 
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         let mut address = None;
-        for (k, v) in url.query_pairs() {
-            if k == "address" {
-                address =
-                    Some(v.parse().map_err(|_| {
-                        Error::InvalidLeaseQuery(url.query().unwrap_or("").to_string())
-                    })?)
+        if let Some(mut path_segments) = url.path_segments() {
+            if let Some(address_segment) = path_segments.next() {
+                address = Some(address_segment.to_string())
             }
         }
         if let Some(address) = address {
             Ok(Self { address })
         } else {
-            return Err(Error::InvalidLeaseQuery(
-                url.query().unwrap_or("").to_string(),
-            ));
+            return Err(Error::InvalidLeasingPath(url.path().to_string()));
         }
     }
 }

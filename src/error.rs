@@ -44,8 +44,8 @@ pub enum Error {
     InvalidTransactionPath(String),
     #[error("InvalidTransactionQuery: {0}")]
     InvalidTransactionQuery(ErrorQuery),
-    #[error("InvalidLeasingQuery: {0}")]
-    InvalidLeaseQuery(String),
+    #[error("InvalidLeasingPath: {0}")]
+    InvalidLeasingPath(String),
 }
 
 #[derive(Debug)]
