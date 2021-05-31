@@ -1,6 +1,5 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
-use crate::models::Topic;
 use crate::repo::Repo;
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -10,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
 use wavesexchange_log::{error, info};
+use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
 
@@ -215,7 +215,7 @@ impl ClientsTrait for Clients {
                 stream::iter(client.lock().await.subscriptions_iter())
                     .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, repo)))
                     .try_for_each_concurrent(10, |(topic, repo)| async move {
-                        let subscription_key = topic.to_string();
+                        let subscription_key = String::from(topic.to_owned());
                         repo.unsubscribe(subscription_key).await?;
                         Ok(())
                     })

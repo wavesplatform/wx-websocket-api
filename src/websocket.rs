@@ -1,7 +1,6 @@
 use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
-use crate::models::Topic;
 use crate::repo::Repo;
 use crate::shard::Sharded;
 use futures::{stream, SinkExt, StreamExt, TryStreamExt};
@@ -10,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::ws;
 use wavesexchange_log::{error, info};
+use wavesexchange_topic::Topic;
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
@@ -161,7 +161,7 @@ async fn handle_message<R: Repo>(
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
-            let subscription_key = topic.to_string();
+            let subscription_key = String::from(topic.clone());
             let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
@@ -185,7 +185,7 @@ async fn handle_message<R: Repo>(
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
-            let subscription_key = topic.to_string();
+            let subscription_key = String::from(topic.clone());
             let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
@@ -243,7 +243,7 @@ async fn on_disconnect<R: Repo>(
     stream::iter(client_lock.subscriptions_iter())
         .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, &repo)))
         .try_for_each_concurrent(10, |(topic, repo)| async move {
-            repo.unsubscribe(topic.to_string()).await?;
+            repo.unsubscribe(String::from(topic.to_owned())).await?;
             Ok(())
         })
         .await?;
@@ -268,7 +268,7 @@ pub async fn updates_handler<R: Repo>(
     topics: Arc<Sharded<Topics>>,
 ) {
     while let Some(topic) = updates_receiver.recv().await {
-        let subscription_key = topic.to_string();
+        let subscription_key = String::from(topic.clone());
 
         if let Some(value) = repo
             .get_by_key(subscription_key.as_ref())

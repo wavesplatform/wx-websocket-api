@@ -14,10 +14,10 @@ use bb8_redis::{bb8, RedisConnectionManager};
 use client::ClientsTrait;
 use error::Error;
 use futures::stream::{self, StreamExt};
-use models::Topic;
 use repo::RepoImpl;
 use std::sync::Arc;
 use wavesexchange_log::{error, info};
+use wavesexchange_topic::Topic;
 
 fn main() -> Result<(), Error> {
     let mut rt = tokio::runtime::Runtime::new().unwrap();

@@ -1,6 +1,7 @@
-use crate::{error::Error, models::Topic};
+use crate::error::Error;
 use std::convert::TryFrom;
 use wavesexchange_log::info;
+use wavesexchange_topic::Topic;
 
 // NB: redis server has to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
