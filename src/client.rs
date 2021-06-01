@@ -27,10 +27,12 @@ pub struct Client {
     leasing_balance_last_values: HashMap<Topic, LeasingBalance>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct LeasingBalance {
     address: String,
+    #[serde(rename = "in")]
     balance_in: i64,
+    #[serde(rename = "out")]
     balance_out: i64,
 }
 
@@ -39,12 +41,12 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
         if old_value.balance_out == new_value.balance_out {
             serde_json::to_string(&new_value).unwrap()
         } else {
-            let v = serde_json::json!({"address": new_value.address, "balance_out": new_value.balance_out});
+            let v = serde_json::json!({"address": new_value.address, "out": new_value.balance_out});
             serde_json::to_string(&v).unwrap()
         }
     } else {
         if old_value.balance_out == new_value.balance_out {
-            let v = serde_json::json!({"address": new_value.address, "balance_in": new_value.balance_in});
+            let v = serde_json::json!({"address": new_value.address, "in": new_value.balance_in});
             serde_json::to_string(&v).unwrap()
         } else {
             serde_json::to_string(&new_value).unwrap()
