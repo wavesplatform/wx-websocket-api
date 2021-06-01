@@ -24,6 +24,32 @@ pub struct Client {
     pings: Vec<i64>,
     request_id: Option<String>,
     new_subscriptions: HashSet<Topic>,
+    leasing_balance_last_values: HashMap<Topic, LeasingBalance>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct LeasingBalance {
+    address: String,
+    balance_in: i64,
+    balance_out: i64,
+}
+
+fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) -> String {
+    if old_value.balance_in == new_value.balance_in {
+        if old_value.balance_out == new_value.balance_out {
+            serde_json::to_string(&new_value).unwrap()
+        } else {
+            let v = serde_json::json!({"address": new_value.address, "balance_out": new_value.balance_out});
+            serde_json::to_string(&v).unwrap()
+        }
+    } else {
+        if old_value.balance_out == new_value.balance_out {
+            let v = serde_json::json!({"address": new_value.address, "balance_in": new_value.balance_in});
+            serde_json::to_string(&v).unwrap()
+        } else {
+            serde_json::to_string(&new_value).unwrap()
+        }
+    }
 }
 
 impl Client {
@@ -38,6 +64,7 @@ impl Client {
             new_subscriptions: HashSet::new(),
             message_counter: 1,
             pings: vec![],
+            leasing_balance_last_values: HashMap::new(),
         }
     }
 
@@ -88,27 +115,34 @@ impl Client {
 
     pub fn send_ping(&mut self) -> Result<(), Error> {
         self.pings.push(self.message_counter);
-        let message = OutcomeMessage::Ping {
-            message_number: self.message_counter,
-        };
+        let message_number = self.message_counter;
+        let message = OutcomeMessage::Ping { message_number };
         self.send(message)
     }
 
-    pub fn send_subscribed(
-        &mut self,
-        subscription_key: ClientSubscriptionKey,
-        value: String,
-    ) -> Result<(), Error> {
-        let message = OutcomeMessage::Subscribed {
-            message_number: self.message_counter,
-            topic: subscription_key,
-            value,
-        };
-        self.send(message)
+    pub fn send_subscribed(&mut self, topic: &Topic, value: String) -> Result<(), Error> {
+        if let Some(subscription_key) = self.subscriptions.get(topic) {
+            if let Ok(Some(lb)) = serde_json::from_str(&value) {
+                self.leasing_balance_last_values.insert(topic.clone(), lb);
+            }
+            let message = OutcomeMessage::Subscribed {
+                message_number: self.message_counter,
+                topic: subscription_key.clone(),
+                value,
+            };
+            self.send(message)?;
+        }
+        Ok(())
     }
 
-    pub fn send_update(&mut self, topic: &Topic, value: String) -> Result<(), Error> {
+    pub fn send_update(&mut self, topic: &Topic, mut value: String) -> Result<(), Error> {
         if let Some(client_subscription_key) = self.subscriptions.get(topic) {
+            if let Ok(Some(lb)) = serde_json::from_str(&value) {
+                if let Some(old_value) = self.leasing_balance_last_values.get(topic) {
+                    value = leasing_balance_diff(old_value, &lb);
+                }
+                self.leasing_balance_last_values.insert(topic.clone(), lb);
+            }
             let message = if self.new_subscriptions.remove(topic) {
                 OutcomeMessage::Subscribed {
                     message_number: self.message_counter,

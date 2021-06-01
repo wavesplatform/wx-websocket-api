@@ -172,7 +172,7 @@ async fn handle_message<R: Repo>(
                 repo.subscribe(subscription_key.clone()).await?;
                 client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                    client_lock.send_subscribed(client_subscription_key, value)?;
+                    client_lock.send_subscribed(&topic, value)?;
                 } else {
                     client_lock.add_new_subscription(topic.clone());
                 }
