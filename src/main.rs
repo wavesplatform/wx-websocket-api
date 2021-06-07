@@ -11,10 +11,8 @@ mod updater;
 mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
-use client::ClientsTrait;
 use error::Error;
-use futures::stream::{self, StreamExt};
-use repo::RepoImpl;
+use repo::{Refresher, RepoImpl};
 use std::sync::Arc;
 use wavesexchange_log::{error, info};
 use wavesexchange_topic::Topic;
@@ -35,13 +33,15 @@ async fn tokio_main() -> Result<(), Error> {
         repo_config.username, repo_config.password, repo_config.host, repo_config.port
     );
 
-    let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
-    let pool = bb8::Pool::builder().build(manager).await?;
-    let repo = RepoImpl::new(pool.clone(), repo_config.subscriptions_key);
-    let repo = Arc::new(repo);
-
     let clients = Arc::new(shard::Sharded::<client::Clients>::new(20));
     let topics = Arc::new(shard::Sharded::<client::Topics>::new(20));
+
+    let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
+    let pool = bb8::Pool::builder().build(manager).await?;
+    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl.clone()));
+
+    let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
+    let refresher_handle = tokio::spawn(async move { refresher.run().await });
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel::<Topic>();
 
@@ -81,13 +81,8 @@ async fn tokio_main() -> Result<(), Error> {
         client_ping_interval: tokio::time::Duration::from_secs(server_config.client_ping_interval),
         client_ping_failures_threshold: server_config.client_ping_failures_threshold,
     };
-    let (server_stop_tx, server) = server::start(
-        server_config.port,
-        repo.clone(),
-        clients.clone(),
-        topics.clone(),
-        server_options,
-    );
+    let (server_stop_tx, server) =
+        server::start(server_config.port, repo, clients, topics, server_options);
     let server_handler = tokio::spawn(server);
 
     let updates_future = async {
@@ -95,7 +90,8 @@ async fn tokio_main() -> Result<(), Error> {
             transaction_updates_handler,
             transactions_updates_handle,
             updates_handler_handle,
-            updates_handle
+            updates_handle,
+            refresher_handle,
         ) {
             let err = Error::from(e);
             error!("{}", err);
@@ -110,13 +106,5 @@ async fn tokio_main() -> Result<(), Error> {
     }
     let _ = server_stop_tx.send(());
     server_handler.await?;
-
-    stream::iter(&*clients)
-        .map(|shard| (shard, &repo))
-        .for_each_concurrent(20, |(shard, repo)| async move {
-            shard.clean(repo).await;
-        })
-        .await;
-
     Ok(())
 }

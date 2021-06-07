@@ -13,7 +13,7 @@ pub fn run(
         let mut conn = redis_client.get_connection()?;
         let mut pubsub = conn.as_pubsub();
         pubsub.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
-        pubsub.psubscribe("__keyevent*__:*")?;
+        pubsub.psubscribe("__keyevent*__:set")?;
         loop {
             match pubsub.get_message() {
                 Ok(msg) => {

@@ -2,6 +2,7 @@ use crate::error::Error;
 use crate::repo;
 use crate::server;
 use serde::Deserialize;
+use std::time::Duration;
 
 fn default_port() -> u16 {
     8080
@@ -17,6 +18,10 @@ fn default_client_ping_interval_in_secs() -> u64 {
 
 fn default_client_ping_failures_threshold() -> u16 {
     3
+}
+
+fn default_ttl() -> u64 {
+    60
 }
 
 #[derive(Deserialize)]
@@ -36,7 +41,8 @@ struct FlatRepoConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
-    pub subscriptions_key: String,
+    #[serde(default = "default_ttl")]
+    pub ttl: u64,
 }
 
 pub fn load_repo() -> Result<repo::Config, Error> {
@@ -47,7 +53,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
         port: flat_config.port,
         username: flat_config.username,
         password: flat_config.password,
-        subscriptions_key: flat_config.subscriptions_key,
+        ttl: Duration::from_secs(flat_config.ttl),
     })
 }
 

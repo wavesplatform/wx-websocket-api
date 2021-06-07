@@ -1,14 +1,12 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
-use crate::repo::Repo;
-use async_trait::async_trait;
-use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
-use wavesexchange_log::{error, info};
+use wavesexchange_log::info;
 use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
@@ -210,57 +208,66 @@ pub type Clients = RwLock<HashMap<ClientId, Arc<Mutex<Client>>>>;
 pub type Topics = RwLock<ClientIdsByTopics>;
 
 #[derive(Default, Debug)]
-pub struct ClientIdsByTopics(HashMap<Topic, HashSet<ClientId>>);
+pub struct ClientIdsByTopics(HashMap<Topic, KeyInfo>);
+
+#[derive(Debug)]
+pub struct KeyInfo {
+    clients: HashSet<ClientId>,
+    update_time: Instant,
+}
+
+impl KeyInfo {
+    pub fn new(client_id: ClientId) -> Self {
+        let mut clients = HashSet::new();
+        clients.insert(client_id);
+        let update_time = Instant::now();
+        Self {
+            clients,
+            update_time,
+        }
+    }
+
+    pub fn dying_soon(&self, dying_time: Instant) -> bool {
+        self.update_time < dying_time
+    }
+
+    pub fn refresh_time(&mut self, update_time: Instant) {
+        if self.update_time < update_time {
+            self.update_time = update_time
+        }
+    }
+}
 
 impl ClientIdsByTopics {
     pub fn add_subscription(&mut self, topic: Topic, client_id: ClientId) {
         if let Some(clients) = self.0.get_mut(&topic) {
-            clients.insert(client_id);
+            clients.clients.insert(client_id);
         } else {
-            let mut v = HashSet::new();
-            v.insert(client_id);
+            let v = KeyInfo::new(client_id);
             self.0.insert(topic, v);
         }
     }
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
-        if let Some(client_ids) = self.0.get_mut(&topic) {
-            client_ids.remove(client_id);
-            if client_ids.is_empty() {
+        if let Some(key_info) = self.0.get_mut(&topic) {
+            key_info.clients.remove(client_id);
+            if key_info.clients.is_empty() {
                 self.0.remove(&topic);
             }
         };
     }
 
     pub fn get_client_ids(&self, topic: &Topic) -> Option<&HashSet<ClientId>> {
-        self.0.get(topic)
+        self.0.get(topic).map(|key_info| &key_info.clients)
     }
-}
 
-#[async_trait]
-pub trait ClientsTrait {
-    async fn clean<R: Repo>(&self, repo: &Arc<R>);
-}
+    pub fn topics_iter(&self) -> std::collections::hash_map::Iter<'_, Topic, KeyInfo> {
+        self.0.iter()
+    }
 
-#[async_trait]
-impl ClientsTrait for Clients {
-    async fn clean<R: Repo>(&self, repo: &Arc<R>) {
-        if let Err(error) = stream::iter(self.write().await.iter_mut())
-            .map(|(_client_id, client)| Ok::<_, Error>((client, &repo)))
-            .try_for_each_concurrent(10, |(client, repo)| async move {
-                stream::iter(client.lock().await.subscriptions_iter())
-                    .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, repo)))
-                    .try_for_each_concurrent(10, |(topic, repo)| async move {
-                        let subscription_key = String::from(topic.to_owned());
-                        repo.unsubscribe(subscription_key).await?;
-                        Ok(())
-                    })
-                    .await?;
-                Ok(())
-            })
-            .await
-        {
-            error!("error on cleaning clients: {:?}", error)
-        };
+    pub fn refresh_topic(&mut self, topic: Topic, update_time: Instant) {
+        if let Some(key_info) = self.0.get_mut(&topic) {
+            key_info.refresh_time(update_time)
+        }
     }
 }
