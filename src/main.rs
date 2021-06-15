@@ -38,7 +38,7 @@ async fn tokio_main() -> Result<(), Error> {
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
     let pool = bb8::Pool::builder().build(manager).await?;
-    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl.clone()));
+    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl));
 
     let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
     let refresher_handle = tokio::spawn(async move { refresher.run().await });

@@ -42,13 +42,11 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
             let v = serde_json::json!({"address": new_value.address, "out": new_value.balance_out});
             serde_json::to_string(&v).unwrap()
         }
+    } else if old_value.balance_out == new_value.balance_out {
+        let v = serde_json::json!({"address": new_value.address, "in": new_value.balance_in});
+        serde_json::to_string(&v).unwrap()
     } else {
-        if old_value.balance_out == new_value.balance_out {
-            let v = serde_json::json!({"address": new_value.address, "in": new_value.balance_in});
-            serde_json::to_string(&v).unwrap()
-        } else {
-            serde_json::to_string(&new_value).unwrap()
-        }
+        serde_json::to_string(&new_value).unwrap()
     }
 }
 
