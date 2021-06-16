@@ -1,15 +1,15 @@
 use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
-use crate::models::Topic;
 use crate::repo::Repo;
 use crate::shard::Sharded;
-use futures::{stream, SinkExt, StreamExt, TryStreamExt};
+use futures::{stream, SinkExt, StreamExt};
 use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::ws;
 use wavesexchange_log::{error, info};
+use wavesexchange_topic::Topic;
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
@@ -49,14 +49,14 @@ pub async fn handle_connection<R: Repo>(
         &client,
         &client_id,
         &topics,
-        &repo,
+        repo,
         options,
         client_rx,
     )
     .await;
 
     // handle connection close
-    on_disconnect(socket, repo, client, client_id, clients, topics).await?;
+    on_disconnect(socket, client, client_id, clients, topics).await?;
 
     Ok(())
 }
@@ -66,7 +66,7 @@ async fn run<R: Repo>(
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
     topics: &Arc<Sharded<Topics>>,
-    repo: &Arc<R>,
+    repo: Arc<R>,
     options: HandleConnectionOptions,
     mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
 ) {
@@ -91,7 +91,7 @@ async fn run<R: Repo>(
                         break;
                     }
 
-                    if match handle_message(repo, client, client_id, topics, &msg).await {
+                    if match handle_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {}", error);
@@ -161,7 +161,7 @@ async fn handle_message<R: Repo>(
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
-            let subscription_key = topic.to_string();
+            let subscription_key = String::from(topic.clone());
             let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
@@ -172,7 +172,7 @@ async fn handle_message<R: Repo>(
                 repo.subscribe(subscription_key.clone()).await?;
                 client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                    client_lock.send_subscribed(client_subscription_key, value)?;
+                    client_lock.send_subscribed(&topic, value)?;
                 } else {
                     client_lock.add_new_subscription(topic.clone());
                 }
@@ -185,11 +185,9 @@ async fn handle_message<R: Repo>(
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
-            let subscription_key = topic.to_string();
             let mut client_lock = client.lock().await;
 
             if client_lock.contains_subscription(&topic) {
-                repo.unsubscribe(subscription_key.clone()).await?;
                 client_lock.remove_subscription(&topic);
                 topics
                     .get(&topic)
@@ -219,9 +217,8 @@ async fn send_error(
         .send_error(code, message.into(), Some(error_details))
 }
 
-async fn on_disconnect<R: Repo>(
+async fn on_disconnect(
     socket: ws::WebSocket,
-    repo: Arc<R>,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
     clients: Arc<Sharded<Clients>>,
@@ -239,14 +236,6 @@ async fn on_disconnect<R: Repo>(
                 .remove_subscription(topic, &client_id);
         })
         .await;
-    // unsubscribing all topics from repo
-    stream::iter(client_lock.subscriptions_iter())
-        .map(|(topic, _subscription_key)| Ok::<_, Error>((topic, &repo)))
-        .try_for_each_concurrent(10, |(topic, repo)| async move {
-            repo.unsubscribe(topic.to_string()).await?;
-            Ok(())
-        })
-        .await?;
 
     info!(
         "client #{} disconnected; he got {} messages",
@@ -268,7 +257,7 @@ pub async fn updates_handler<R: Repo>(
     topics: Arc<Sharded<Topics>>,
 ) {
     while let Some(topic) = updates_receiver.recv().await {
-        let subscription_key = topic.to_string();
+        let subscription_key = String::from(topic.clone());
 
         if let Some(value) = repo
             .get_by_key(subscription_key.as_ref())

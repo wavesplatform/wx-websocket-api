@@ -1,4 +1,4 @@
-use crate::models::Topic;
+use wavesexchange_topic::Topic;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -44,6 +44,10 @@ pub enum Error {
     InvalidTransactionPath(String),
     #[error("InvalidTransactionQuery: {0}")]
     InvalidTransactionQuery(ErrorQuery),
+    #[error("InvalidLeasingPath: {0}")]
+    InvalidLeasingPath(String),
+    #[error("TopicError: {0}")]
+    TopicError(wavesexchange_topic::error::Error),
 }
 
 #[derive(Debug)]

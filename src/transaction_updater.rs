@@ -1,7 +1,7 @@
 use crate::error::Error;
-use crate::models::Topic;
 use std::convert::TryFrom;
 use wavesexchange_log::info;
+use wavesexchange_topic::Topic;
 
 // NB: redis server has to be configured to publish keyspace notifications:
 // https://redis.io/topics/notifications
@@ -23,7 +23,7 @@ pub fn run(
                         let value = msg.get_payload::<String>()?;
                         transaction_updates_sender
                             .send((topic, value))
-                            .expect_err("error occured while sending resource transaction update");
+                            .expect("error occured while sending resource transaction update");
                     }
                 }
                 Err(error) => {
