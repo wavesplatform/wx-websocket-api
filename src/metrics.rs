@@ -3,10 +3,10 @@ use prometheus::{Counter, IntGauge, Registry};
 lazy_static! {
     pub static ref REGISTRY: Registry = Registry::new();
     pub static ref CLIENTS: IntGauge =
-        IntGauge::new("Backend websocket Clients count", "Count of clients")
+        IntGauge::new("Backend_websocket_Clients_count", "Count of clients")
             .expect("can't create clients metrics");
     pub static ref MESSAGES: Counter = Counter::new(
-        "Backend websocket Messages count",
+        "Backend_websocket_Messages_count",
         "Count of messages sended to clients"
     )
     .expect("can't create messages metrics");
