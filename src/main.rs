@@ -2,6 +2,7 @@ mod client;
 mod config;
 mod error;
 mod messages;
+mod metrics;
 mod models;
 mod repo;
 mod server;
@@ -18,7 +19,7 @@ use wavesexchange_log::{error, info};
 use wavesexchange_topic::Topic;
 
 fn main() -> Result<(), Error> {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(tokio_main());
     rt.shutdown_timeout(std::time::Duration::from_millis(1));
     result
@@ -27,6 +28,8 @@ fn main() -> Result<(), Error> {
 async fn tokio_main() -> Result<(), Error> {
     let repo_config = config::load_repo()?;
     let server_config = config::load_server()?;
+
+    metrics::register_metrics();
 
     let redis_connection_url = format!(
         "redis://{}:{}@{}:{}/",

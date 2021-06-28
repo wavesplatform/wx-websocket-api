@@ -1,6 +1,7 @@
 use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
+use crate::metrics::CLIENTS;
 use crate::repo::Repo;
 use crate::shard::Sharded;
 use futures::{stream, SinkExt, StreamExt};
@@ -37,6 +38,8 @@ pub async fn handle_connection<R: Repo>(
         request_id.clone(),
     )));
 
+    CLIENTS.inc();
+
     clients
         .get(&client_id)
         .write()
@@ -57,6 +60,8 @@ pub async fn handle_connection<R: Repo>(
 
     // handle connection close
     on_disconnect(socket, client, client_id, clients, topics).await?;
+
+    CLIENTS.dec();
 
     Ok(())
 }
