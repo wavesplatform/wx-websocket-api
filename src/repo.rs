@@ -96,7 +96,7 @@ impl<R: Repo> Refresher<R> {
     pub async fn run(&self) -> Result<(), Error> {
         let refresh_time = self.ttl / 4;
         loop {
-            tokio::time::delay_for(refresh_time).await;
+            tokio::time::sleep(refresh_time).await;
             let mut topics_to_update = vec![];
             for clients_topics in &*self.topics {
                 let dying_time = Instant::now() - self.ttl / 2;
