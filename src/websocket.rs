@@ -58,10 +58,10 @@ pub async fn handle_connection<R: Repo>(
     )
     .await;
 
+    CLIENTS.dec();
+
     // handle connection close
     on_disconnect(socket, client, client_id, clients, topics).await?;
-
-    CLIENTS.dec();
 
     Ok(())
 }
