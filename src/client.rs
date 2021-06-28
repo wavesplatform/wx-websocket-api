@@ -53,29 +53,61 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
 #[test]
 fn leasing_balance_diff_test() {
     // changed both fields
-    let lb1 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 2 };
-    let lb2 = LeasingBalance{ address: "address".to_string(), balance_in: 5, balance_out: 8 };
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 5,
+        balance_out: 8,
+    };
     let diff = leasing_balance_diff(&lb1, &lb2);
     assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
     let diff = leasing_balance_diff(&lb2, &lb1);
     assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
     // changed only out
-    let lb1 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 2 };
-    let lb2 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 8 };
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 8,
+    };
     let diff = leasing_balance_diff(&lb1, &lb2);
     assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
     let diff = leasing_balance_diff(&lb2, &lb1);
     assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
     // changed only in
-    let lb1 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 2 };
-    let lb2 = LeasingBalance{ address: "address".to_string(), balance_in: 5, balance_out: 2 };
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 5,
+        balance_out: 2,
+    };
     let diff = leasing_balance_diff(&lb1, &lb2);
     assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
     let diff = leasing_balance_diff(&lb2, &lb1);
     assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
     // no changes
-    let lb1 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 2 };
-    let lb2 = LeasingBalance{ address: "address".to_string(), balance_in: 7, balance_out: 2 };
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
     let diff = leasing_balance_diff(&lb1, &lb2);
     assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
 }
