@@ -91,6 +91,10 @@ async fn run<R: Repo>(
                         break;
                     }
 
+                    if msg.is_ping() || msg.is_pong() {
+                        continue
+                    }
+
                     if match handle_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
