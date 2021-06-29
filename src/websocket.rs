@@ -273,6 +273,10 @@ pub async fn updates_handler<R: Repo>(
             .await
             .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
         {
+            if &subscription_key == "topic://blockchain_height" && &value == "0" {
+                error!("blockchain_height contains zero");
+                panic!("blockchain_height contains zero")
+            }
             handle_update(topic, value, &clients, &topics).await
         }
     }
