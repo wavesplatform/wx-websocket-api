@@ -10,8 +10,6 @@ pub enum Error {
     WarpError(#[from] warp::Error),
     #[error("SerdeJsonError: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
-    #[error("RedisPoolError: {0}")]
-    RedisPoolError(#[from] bb8_redis::redis::RedisError),
     #[error("RunRedisError: {0}")]
     RunRedisError(#[from] bb8::RunError<bb8_redis::redis::RedisError>),
     #[error("RedisError: {0}")]

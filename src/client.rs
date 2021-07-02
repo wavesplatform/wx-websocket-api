@@ -1,5 +1,6 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
+use crate::metrics::MESSAGES;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -192,6 +193,7 @@ impl Client {
                 value,
             };
             self.send(message)?;
+            MESSAGES.inc();
         }
         Ok(())
     }
@@ -218,6 +220,7 @@ impl Client {
                 }
             };
             self.send(message)?;
+            MESSAGES.inc();
         }
         Ok(())
     }

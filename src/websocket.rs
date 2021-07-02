@@ -1,6 +1,7 @@
 use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
+use crate::metrics::CLIENTS;
 use crate::repo::Repo;
 use crate::shard::Sharded;
 use futures::{stream, SinkExt, StreamExt};
@@ -37,6 +38,8 @@ pub async fn handle_connection<R: Repo>(
         request_id.clone(),
     )));
 
+    CLIENTS.inc();
+
     clients
         .get(&client_id)
         .write()
@@ -54,6 +57,8 @@ pub async fn handle_connection<R: Repo>(
         client_rx,
     )
     .await;
+
+    CLIENTS.dec();
 
     // handle connection close
     on_disconnect(socket, client, client_id, clients, topics).await?;
@@ -268,6 +273,10 @@ pub async fn updates_handler<R: Repo>(
             .await
             .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
         {
+            if &subscription_key == "topic://blockchain_height" && &value == "0" {
+                error!("blockchain_height contains zero");
+                panic!("blockchain_height contains zero")
+            }
             handle_update(topic, value, &clients, &topics).await
         }
     }
