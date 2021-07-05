@@ -7,7 +7,6 @@ mod models;
 mod repo;
 mod server;
 mod shard;
-mod transaction_updater;
 mod updater;
 mod websocket;
 
@@ -16,7 +15,6 @@ use error::Error;
 use repo::{Refresher, RepoImpl};
 use std::sync::Arc;
 use wavesexchange_log::{error, info};
-use wavesexchange_topic::Topic;
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -46,16 +44,11 @@ async fn tokio_main() -> Result<(), Error> {
     let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
     let refresher_handle = tokio::spawn(async move { refresher.run().await });
 
-    let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel::<Topic>();
+    let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
     let updates_handler_handle = tokio::task::spawn({
         info!("updates handler started");
-        websocket::updates_handler(
-            updates_receiver,
-            repo.clone(),
-            clients.clone(),
-            topics.clone(),
-        )
+        websocket::updates_handler(updates_receiver, clients.clone(), topics.clone())
     });
 
     let redis_conn = redis::Client::open(redis_connection_url)?;
@@ -63,21 +56,6 @@ async fn tokio_main() -> Result<(), Error> {
     let updates_handle = tokio::task::spawn_blocking(move || {
         info!("updater started");
         updater::run(conn, updates_sender)
-    });
-
-    let (transaction_updates_sender, transaction_updates_receiver) =
-        tokio::sync::mpsc::unbounded_channel();
-    let transaction_updates_handler = tokio::spawn({
-        info!("transactions updates handler started");
-        websocket::transactions_updates_handler(
-            transaction_updates_receiver,
-            clients.clone(),
-            topics.clone(),
-        )
-    });
-    let transactions_updates_handle = tokio::task::spawn_blocking(move || {
-        info!("transactions updater started");
-        transaction_updater::run(redis_conn, transaction_updates_sender)
     });
 
     let server_options = server::ServerOptions {
@@ -89,13 +67,8 @@ async fn tokio_main() -> Result<(), Error> {
     let server_handler = tokio::spawn(server);
 
     let updates_future = async {
-        if let Err(e) = tokio::try_join!(
-            transaction_updates_handler,
-            transactions_updates_handle,
-            updates_handler_handle,
-            updates_handle,
-            refresher_handle,
-        ) {
+        if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle, refresher_handle,)
+        {
             let err = Error::from(e);
             error!("{}", err);
             return Err(err);

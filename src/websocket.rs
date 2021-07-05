@@ -259,59 +259,27 @@ async fn on_disconnect(
     Ok(())
 }
 
-pub async fn updates_handler<R: Repo>(
-    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
-    repo: Arc<R>,
+pub async fn updates_handler(
+    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) {
-    while let Some(topic) = updates_receiver.recv().await {
-        let subscription_key = String::from(topic.clone());
-
-        if let Some(value) = repo
-            .get_by_key(subscription_key.as_ref())
+    while let Some((topic, value)) = updates_receiver.recv().await {
+        let maybe_client_ids = topics
+            .get(&topic)
+            .read()
             .await
-            .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
-        {
-            if &subscription_key == "topic://blockchain_height" && &value == "0" {
-                error!("blockchain_height contains zero");
-                panic!("blockchain_height contains zero")
-            }
-            handle_update(topic, value, &clients, &topics).await
-        }
-    }
-}
-
-pub async fn transactions_updates_handler(
-    mut transaction_updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
-) {
-    while let Some((topic, value)) = transaction_updates_receiver.recv().await {
-        handle_update(topic, value, &clients, &topics).await
-    }
-}
-
-async fn handle_update(
-    topic: Topic,
-    value: String,
-    clients: &Arc<Sharded<Clients>>,
-    topics: &Arc<Sharded<Topics>>,
-) {
-    let maybe_client_ids = topics
-        .get(&topic)
-        .read()
-        .await
-        .get_client_ids(&topic)
-        .cloned();
-    if let Some(client_ids) = maybe_client_ids {
-        for client_id in client_ids {
-            if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
-                client
-                    .lock()
-                    .await
-                    .send_update(&topic, value.to_owned())
-                    .expect("error occured while sending message")
+            .get_client_ids(&topic)
+            .cloned();
+        if let Some(client_ids) = maybe_client_ids {
+            for client_id in client_ids {
+                if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
+                    client
+                        .lock()
+                        .await
+                        .send_update(&topic, value.to_owned())
+                        .expect("error occured while sending message")
+                }
             }
         }
     }
