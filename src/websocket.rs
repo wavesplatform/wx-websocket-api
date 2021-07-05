@@ -103,11 +103,11 @@ async fn run<R: Repo>(
                     if match handle_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
-                            let error = format!("Invalid topic: {}", error);
+                            let error = format!("Invalid topic: {:?} – {}", msg, error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::UrlParseError(error)) => {
-                            let error = format!("Invalid topic format: {:?}", error);
+                            let error = format!("Invalid topic format: {:?} – {:?}", msg, error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::InvalidPongMessage) => {
@@ -116,7 +116,7 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occured while processing message: {:?}", err);
+                            error!("error occured while processing client message: {:?} – {:?}", msg, err);
                             break;
                         }
                         _ => Ok(())
