@@ -58,10 +58,10 @@ pub async fn handle_connection<R: Repo>(
     )
     .await;
 
-    CLIENTS.dec();
-
     // handle connection close
-    on_disconnect(socket, client, client_id, clients, topics).await?;
+    on_disconnect(socket, client, client_id, clients, topics).await;
+
+    CLIENTS.dec();
 
     Ok(())
 }
@@ -116,12 +116,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occured while processing client message: {:?} – {:?}", msg, err);
+                            error!("error occured while processing client #{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("error occured while sending message to client");
+                        error!("error occured while sending message to client #{}", client_id);
                         break;
                     }
                 }
@@ -143,11 +143,11 @@ async fn run<R: Repo>(
                 let mut client_lock = client.lock().await;
 
                 if client_lock.pings_len() >= options.ping_failures_threshold {
-                    info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
+                    info!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
                     break;
                 }
                 if let Err(error) = client_lock.send_ping() {
-                    error!("error occured while sending ping message to client: {:?}", error);
+                    error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
                     break;
                 }
             },
@@ -227,13 +227,14 @@ async fn send_error(
 }
 
 async fn on_disconnect(
-    socket: ws::WebSocket,
+    mut socket: ws::WebSocket,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
-) -> Result<(), Error> {
+) -> () {
     let client_lock = client.lock().await;
+
     // remove topics from Topics
     stream::iter(client_lock.subscriptions_iter())
         .map(|(topic, _)| (topic, &topics))
@@ -254,9 +255,12 @@ async fn on_disconnect(
     );
 
     clients.get(&client_id).write().await.remove(&client_id);
-    socket.close().await?;
 
-    Ok(())
+    // 1) errors will be only if socket already closed so just mute it
+    // 2) client.sender sink closed, so send message using socket
+    // todo: send real reason?
+    let _ = socket.send(ws::Message::close_with(1000u16, "")).await;
+    let _ = socket.close().await;
 }
 
 pub async fn updates_handler(
