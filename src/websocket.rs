@@ -58,10 +58,10 @@ pub async fn handle_connection<R: Repo>(
     )
     .await;
 
-    CLIENTS.dec();
-
     // handle connection close
-    on_disconnect(socket, client, client_id, clients, topics).await?;
+    on_disconnect(socket, client, client_id, clients, topics).await;
+
+    CLIENTS.dec();
 
     Ok(())
 }
@@ -103,11 +103,11 @@ async fn run<R: Repo>(
                     if match handle_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
-                            let error = format!("Invalid topic: {}", error);
+                            let error = format!("Invalid topic: {:?} – {}", msg, error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::UrlParseError(error)) => {
-                            let error = format!("Invalid topic format: {:?}", error);
+                            let error = format!("Invalid topic format: {:?} – {:?}", msg, error);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
                         }
                         Err(Error::InvalidPongMessage) => {
@@ -116,12 +116,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occured while processing message: {:?}", err);
+                            error!("error occured while processing client #{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("error occured while sending message to client");
+                        error!("error occured while sending message to client #{}", client_id);
                         break;
                     }
                 }
@@ -143,11 +143,11 @@ async fn run<R: Repo>(
                 let mut client_lock = client.lock().await;
 
                 if client_lock.pings_len() >= options.ping_failures_threshold {
-                    info!("client did not answer for {} consequent ping messages", options.ping_failures_threshold);
+                    info!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
                     break;
                 }
                 if let Err(error) = client_lock.send_ping() {
-                    error!("error occured while sending ping message to client: {:?}", error);
+                    error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
                     break;
                 }
             },
@@ -227,13 +227,14 @@ async fn send_error(
 }
 
 async fn on_disconnect(
-    socket: ws::WebSocket,
+    mut socket: ws::WebSocket,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
-) -> Result<(), Error> {
+) -> () {
     let client_lock = client.lock().await;
+
     // remove topics from Topics
     stream::iter(client_lock.subscriptions_iter())
         .map(|(topic, _)| (topic, &topics))
@@ -254,64 +255,35 @@ async fn on_disconnect(
     );
 
     clients.get(&client_id).write().await.remove(&client_id);
-    socket.close().await?;
 
-    Ok(())
+    // 1) errors will be only if socket already closed so just mute it
+    // 2) client.sender sink closed, so send message using socket
+    // todo: send real reason?
+    let _ = socket.send(ws::Message::close_with(1000u16, "")).await;
+    let _ = socket.close().await;
 }
 
-pub async fn updates_handler<R: Repo>(
-    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<Topic>,
-    repo: Arc<R>,
+pub async fn updates_handler(
+    mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) {
-    while let Some(topic) = updates_receiver.recv().await {
-        let subscription_key = String::from(topic.clone());
-
-        if let Some(value) = repo
-            .get_by_key(subscription_key.as_ref())
+    while let Some((topic, value)) = updates_receiver.recv().await {
+        let maybe_client_ids = topics
+            .get(&topic)
+            .read()
             .await
-            .unwrap_or_else(|_| panic!("Cannot get value by key {}", subscription_key))
-        {
-            if &subscription_key == "topic://blockchain_height" && &value == "0" {
-                error!("blockchain_height contains zero");
-                panic!("blockchain_height contains zero")
-            }
-            handle_update(topic, value, &clients, &topics).await
-        }
-    }
-}
-
-pub async fn transactions_updates_handler(
-    mut transaction_updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
-) {
-    while let Some((topic, value)) = transaction_updates_receiver.recv().await {
-        handle_update(topic, value, &clients, &topics).await
-    }
-}
-
-async fn handle_update(
-    topic: Topic,
-    value: String,
-    clients: &Arc<Sharded<Clients>>,
-    topics: &Arc<Sharded<Topics>>,
-) {
-    let maybe_client_ids = topics
-        .get(&topic)
-        .read()
-        .await
-        .get_client_ids(&topic)
-        .cloned();
-    if let Some(client_ids) = maybe_client_ids {
-        for client_id in client_ids {
-            if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
-                client
-                    .lock()
-                    .await
-                    .send_update(&topic, value.to_owned())
-                    .expect("error occured while sending message")
+            .get_client_ids(&topic)
+            .cloned();
+        if let Some(client_ids) = maybe_client_ids {
+            for client_id in client_ids {
+                if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
+                    client
+                        .lock()
+                        .await
+                        .send_update(&topic, value.to_owned())
+                        .expect("error occured while sending message")
+                }
             }
         }
     }

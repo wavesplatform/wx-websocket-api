@@ -1502,13 +1502,14 @@ checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 
 [[package]]
 name = "wavesexchange_log"
-version = "0.1.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.1.0#33abe7d27cf55e8b52c0b405604adc525fbb53ad"
+version = "0.2.0"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.2.0#4f1f5b81511779e2417c75321819f61d2b3c2895"
 dependencies = [
  "chrono",
  "once_cell",
  "slog",
  "slog-async",
+ "slog-envlogger",
  "slog-json",
  "slog-term",
 ]
@@ -1547,12 +1548,12 @@ dependencies = [
  "serde_json",
  "serde_qs",
  "warp",
- "wavesexchange_log 0.2.0",
+ "wavesexchange_log 0.2.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.7.2)",
 ]
 
 [[package]]
 name = "websocket-service"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1570,7 +1571,7 @@ dependencies = [
  "tokio",
  "url",
  "warp",
- "wavesexchange_log 0.1.0",
+ "wavesexchange_log 0.2.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.2.0)",
  "wavesexchange_topic",
  "wavesexchange_warp",
 ]
