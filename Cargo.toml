@@ -26,6 +26,7 @@ url = "2.2.0"
 wavesexchange_topic = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_topic/0.1.0" }
 prometheus = "0.12"
 lazy_static = "1.4"
+slog = { version = "2.5", features = ["max_level_trace", "release_max_level_debug"] }
 
 [[bin]]
 name = "service"

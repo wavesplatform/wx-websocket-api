@@ -1567,6 +1567,7 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "slog",
  "thiserror",
  "tokio",
  "url",
