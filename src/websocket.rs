@@ -11,6 +11,7 @@ use crate::error::Error;
 use crate::messages::IncomeMessage;
 use crate::metrics::CLIENTS;
 use crate::repo::Repo;
+use crate::shard::Sharded;
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
@@ -24,8 +25,8 @@ pub struct HandleConnectionOptions {
 
 pub async fn handle_connection<R: Repo>(
     mut socket: ws::WebSocket,
-    clients: Arc<Clients>,
-    topics: Arc<Topics>,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     request_id: Option<String>,
@@ -41,7 +42,11 @@ pub async fn handle_connection<R: Repo>(
 
     CLIENTS.inc();
 
-    clients.write().await.insert(client_id, client.clone());
+    clients
+        .get(&client_id)
+        .write()
+        .await
+        .insert(client_id, client.clone());
 
     // ws connection messages processing
     let run_handler = run(
@@ -73,7 +78,7 @@ async fn run<R: Repo>(
     socket: &mut ws::WebSocket,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    topics: &Arc<Topics>,
+    topics: &Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
@@ -162,7 +167,7 @@ async fn handle_message<R: Repo>(
     repo: &Arc<R>,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    topics: &Arc<Topics>,
+    topics: &Arc<Sharded<Topics>>,
     raw_msg: &ws::Message,
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(raw_msg)?;
@@ -180,7 +185,7 @@ async fn handle_message<R: Repo>(
                 let message = "You are already subscribed for the specified topic".to_string();
                 client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
             } else {
-                let mut topics_lock = topics.write().await;
+                let mut topics_lock = topics.get(&topic).write().await;
                 repo.subscribe(subscription_key.clone()).await?;
                 client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
                 if let Some(value) = repo.get_by_key(&subscription_key).await? {
@@ -201,7 +206,11 @@ async fn handle_message<R: Repo>(
 
             if client_lock.contains_subscription(&topic) {
                 client_lock.remove_subscription(&topic);
-                topics.write().await.remove_subscription(&topic, client_id);
+                topics
+                    .get(&topic)
+                    .write()
+                    .await
+                    .remove_subscription(&topic, client_id);
             }
 
             client_lock.send_unsubscribed(client_subscription_key)?;
@@ -229,8 +238,8 @@ async fn on_disconnect(
     mut socket: ws::WebSocket,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
-    clients: Arc<Clients>,
-    topics: Arc<Topics>,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) -> () {
     let client_lock = client.lock().await;
 
@@ -238,7 +247,11 @@ async fn on_disconnect(
     stream::iter(client_lock.subscriptions_iter())
         .map(|(topic, _)| (topic, &topics))
         .for_each_concurrent(20, |(topic, topics)| async move {
-            topics.write().await.remove_subscription(topic, &client_id);
+            topics
+                .get(&topic)
+                .write()
+                .await
+                .remove_subscription(topic, &client_id);
         })
         .await;
 
@@ -249,7 +262,7 @@ async fn on_disconnect(
         "req_id" => client_lock.get_request_id().clone()
     );
 
-    clients.write().await.remove(&client_id);
+    clients.get(&client_id).write().await.remove(&client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
@@ -260,14 +273,19 @@ async fn on_disconnect(
 
 pub async fn updates_handler(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Arc<Clients>,
-    topics: Arc<Topics>,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
 ) {
     while let Some((topic, value)) = updates_receiver.recv().await {
-        let maybe_client_ids = topics.read().await.get_client_ids(&topic).cloned();
+        let maybe_client_ids = topics
+            .get(&topic)
+            .read()
+            .await
+            .get_client_ids(&topic)
+            .cloned();
         if let Some(client_ids) = maybe_client_ids {
             for client_id in client_ids {
-                if let Some(client) = clients.read().await.get(&client_id) {
+                if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
                     client
                         .lock()
                         .await

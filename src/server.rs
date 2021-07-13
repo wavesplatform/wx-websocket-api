@@ -8,6 +8,7 @@ use wavesexchange_warp::log::access;
 use crate::client::{Clients, Topics};
 use crate::metrics::REGISTRY;
 use crate::repo::Repo;
+use crate::shard::Sharded;
 use crate::websocket;
 
 pub struct ServerConfig {
@@ -24,8 +25,8 @@ pub struct ServerOptions {
 pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    clients: Arc<Clients>,
-    topics: Arc<Topics>,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Sharded<Topics>>,
     options: ServerOptions,
     shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> (
