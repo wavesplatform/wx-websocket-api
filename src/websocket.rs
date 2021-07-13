@@ -9,7 +9,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::ws;
-use wavesexchange_log::{error, info};
+use wavesexchange_log::{debug, error, info};
 use wavesexchange_topic::Topic;
 
 const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
@@ -29,6 +29,7 @@ pub async fn handle_connection<R: Repo>(
     repo: Arc<R>,
     options: HandleConnectionOptions,
     request_id: Option<String>,
+    shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await?;
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -47,7 +48,7 @@ pub async fn handle_connection<R: Repo>(
         .insert(client_id, client.clone());
 
     // ws connection messages processing
-    run(
+    let run_handler = run(
         &mut socket,
         &client,
         &client_id,
@@ -55,8 +56,14 @@ pub async fn handle_connection<R: Repo>(
         repo,
         options,
         client_rx,
-    )
-    .await;
+    );
+
+    tokio::select! {
+        _ = run_handler => {},
+        _ = shutdown_signal.closed() => {
+            debug!("shutdown signal handled");
+        }
+    }
 
     // handle connection close
     on_disconnect(socket, client, client_id, clients, topics).await;
@@ -85,14 +92,14 @@ async fn run<R: Repo>(
                         Ok(msg) => msg,
                         Err(disconnected) => {
                             let request_id = client.lock().await.get_request_id().clone();
-                            info!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
+                            debug!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
                         let request_id = client.lock().await.get_request_id().clone();
-                        info!("client #{} connection was closed", client_id; "req_id" => request_id);
+                        debug!("client #{} connection was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
@@ -143,7 +150,7 @@ async fn run<R: Repo>(
                 let mut client_lock = client.lock().await;
 
                 if client_lock.pings_len() >= options.ping_failures_threshold {
-                    info!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
+                    debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
                     break;
                 }
                 if let Err(error) = client_lock.send_ping() {

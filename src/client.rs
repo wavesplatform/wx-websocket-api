@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
-use wavesexchange_log::info;
+use wavesexchange_log::warn;
 use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
@@ -49,68 +49,6 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
     } else {
         serde_json::to_string(&new_value).unwrap()
     }
-}
-
-#[test]
-fn leasing_balance_diff_test() {
-    // changed both fields
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
-    // changed only out
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
-    // changed only in
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
-    // no changes
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
 }
 
 impl Client {
@@ -166,7 +104,7 @@ impl Client {
             Ok(())
         } else {
             // client sent invalid pong message
-            info!("got invalid pong message");
+            warn!("got invalid pong message");
             Err(Error::InvalidPongMessage)
         }
     }
@@ -334,4 +272,66 @@ impl ClientIdsByTopics {
             key_info.refresh_time(update_time)
         }
     }
+}
+
+#[test]
+fn leasing_balance_diff_test() {
+    // changed both fields
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 5,
+        balance_out: 8,
+    };
+    let diff = leasing_balance_diff(&lb1, &lb2);
+    assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
+    let diff = leasing_balance_diff(&lb2, &lb1);
+    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+    // changed only out
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 8,
+    };
+    let diff = leasing_balance_diff(&lb1, &lb2);
+    assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
+    let diff = leasing_balance_diff(&lb2, &lb1);
+    assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
+    // changed only in
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 5,
+        balance_out: 2,
+    };
+    let diff = leasing_balance_diff(&lb1, &lb2);
+    assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
+    let diff = leasing_balance_diff(&lb2, &lb1);
+    assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
+    // no changes
+    let lb1 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let lb2 = LeasingBalance {
+        address: "address".to_string(),
+        balance_in: 7,
+        balance_out: 2,
+    };
+    let diff = leasing_balance_diff(&lb1, &lb2);
+    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
 }

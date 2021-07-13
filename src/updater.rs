@@ -1,22 +1,25 @@
 use crate::error::Error;
 use std::convert::TryFrom;
-use wavesexchange_log::info;
+use wavesexchange_log::{debug, info};
 use wavesexchange_topic::Topic;
 
-// NB: redis server has to be configured to publish keyspace notifications:
-// https://redis.io/topics/notifications
 pub fn run(
     redis_client: redis::Client,
+    updater_timeout: Option<std::time::Duration>,
     updates_sender: tokio::sync::mpsc::UnboundedSender<(Topic, String)>,
 ) -> Result<(), Error> {
     loop {
+        debug!("get new redis connection");
+
         let mut conn = redis_client.get_connection()?;
         let mut pubsub = conn.as_pubsub();
-        pubsub.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+        pubsub.set_read_timeout(updater_timeout)?;
         pubsub.psubscribe("topic://*")?;
         loop {
             match pubsub.get_message() {
                 Ok(msg) => {
+                    debug!("got msg from redis: {:?}", msg);
+
                     if let Ok(topic) = Topic::try_from(msg.get_channel_name()) {
                         let value = msg.get_payload::<String>()?;
                         updates_sender
@@ -30,6 +33,7 @@ pub fn run(
                         info!("updater don't get new events, reopen connection");
                         break;
                     }
+
                     return Err(error.into());
                 }
             }

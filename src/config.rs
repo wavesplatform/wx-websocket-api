@@ -45,6 +45,18 @@ struct FlatRepoConfig {
     pub ttl: u64,
 }
 
+pub mod app {
+    #[derive(Debug, serde::Deserialize)]
+    pub struct Config {
+        pub updater_timeout: Option<std::time::Duration>,
+    }
+
+    pub fn load() -> Result<Config, crate::error::Error> {
+        let config = envy::from_env::<Config>()?;
+        Ok(config)
+    }
+}
+
 pub fn load_repo() -> Result<repo::Config, Error> {
     let flat_config = envy::prefixed("REPO__").from_env::<FlatRepoConfig>()?;
 

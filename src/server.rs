@@ -26,6 +26,7 @@ pub fn start<R: Repo + 'static>(
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
     options: ServerOptions,
+    shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> (
     tokio::sync::oneshot::Sender<()>,
     impl futures::Future<Output = ()>,
@@ -43,11 +44,20 @@ pub fn start<R: Repo + 'static>(
         .and(warp::any().map(move || topics.clone()))
         .and(warp::any().map(move || handle_connection_opts.clone()))
         .and(warp::header::optional::<String>("x-request-id"))
+        .and(warp::any().map(move || shutdown_signal.clone()))
         .map(
-            |ws: warp::ws::Ws, repo: Arc<R>, clients, topics, opts, req_id| {
+            |ws: warp::ws::Ws, repo: Arc<R>, clients, topics, opts, req_id, shutdown_signal| {
                 ws.on_upgrade(move |socket| {
-                    websocket::handle_connection(socket, clients, topics, repo, opts, req_id)
-                        .map(|result| result.expect("Cannot handle ws connection"))
+                    websocket::handle_connection(
+                        socket,
+                        clients,
+                        topics,
+                        repo,
+                        opts,
+                        req_id,
+                        shutdown_signal,
+                    )
+                    .map(|result| result.expect("Cannot handle ws connection"))
                 })
             },
         )
@@ -55,7 +65,7 @@ pub fn start<R: Repo + 'static>(
 
     let metrics = warp::path!("metrics").and_then(metrics_handler);
 
-    info!("websocket server listening on :{}", server_port);
+    info!("websocket server listening on 0.0.0.0:{}", server_port);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (_addr, server) = warp::serve(ws.or(metrics)).bind_with_graceful_shutdown(
