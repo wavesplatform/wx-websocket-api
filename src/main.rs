@@ -4,6 +4,7 @@ mod error;
 mod messages;
 mod metrics;
 mod models;
+mod refresher;
 mod repo;
 mod server;
 mod shard;
@@ -12,7 +13,8 @@ mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
-use repo::{Refresher, RepoImpl};
+use refresher::KeysRefresher;
+use repo::RepoImpl;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use wavesexchange_log::{debug, error, info};
@@ -41,10 +43,10 @@ async fn tokio_main() -> Result<(), Error> {
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
     let pool = bb8::Pool::builder().build(manager).await?;
-    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl));
+    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.key_ttl));
 
-    let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
-    let refresher_handle = tokio::spawn(async move { refresher.run().await });
+    let keys_refresher = KeysRefresher::new(repo.clone(), repo_config.key_ttl, topics.clone());
+    let keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -98,8 +100,8 @@ async fn tokio_main() -> Result<(), Error> {
         _ = sigterm_stream.recv() => {
             debug!("got sigterm");
         },
-        _ = refresher_handle => {
-            debug!("refresher finished");
+        _ = keys_refresher_handle => {
+            debug!("keys_refresher_handle finished");
         },
         _ = updater_handle => {
             debug!("updater finished");

@@ -20,7 +20,7 @@ fn default_client_ping_failures_threshold() -> u16 {
     3
 }
 
-fn default_ttl() -> u64 {
+fn default_key_ttl() -> u64 {
     60
 }
 
@@ -41,8 +41,8 @@ struct FlatRepoConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
-    #[serde(default = "default_ttl")]
-    pub ttl: u64,
+    #[serde(default = "default_key_ttl")]
+    pub key_ttl: u64,
 }
 
 pub mod app {
@@ -86,7 +86,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
         port: flat_config.port,
         username: flat_config.username,
         password: flat_config.password,
-        ttl: Duration::from_secs(flat_config.ttl),
+        key_ttl: Duration::from_secs(flat_config.key_ttl),
     })
 }
 
