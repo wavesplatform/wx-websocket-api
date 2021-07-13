@@ -1,13 +1,14 @@
-use crate::client::{Clients, Topics};
-use crate::metrics::REGISTRY;
-use crate::repo::Repo;
-use crate::shard::Sharded;
-use crate::websocket;
 use futures::future::FutureExt;
 use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use warp::{Filter, Rejection, Reply};
 use wavesexchange_log::info;
+use wavesexchange_warp::log::access;
+
+use crate::client::{Clients, Topics};
+use crate::metrics::REGISTRY;
+use crate::repo::Repo;
+use crate::websocket;
 
 pub struct ServerConfig {
     pub port: u16,
@@ -23,8 +24,8 @@ pub struct ServerOptions {
 pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
+    clients: Arc<Clients>,
+    topics: Arc<Topics>,
     options: ServerOptions,
     shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> (
@@ -75,25 +76,6 @@ pub fn start<R: Repo + 'static>(
         },
     );
     (tx, server)
-}
-
-fn access(info: warp::log::Info) {
-    let req_id = info
-        .request_headers()
-        .get("x-request-id")
-        .map(|h| h.to_str().unwrap_or(&""));
-
-    info!(
-        "access";
-        "path" => info.path(),
-        "method" => info.method().to_string(),
-        "status" => info.status().as_u16(),
-        "ua" => info.user_agent(),
-        "latency" => info.elapsed().as_millis(),
-        "req_id" => req_id,
-        "ip" => info.remote_addr().map(|a| format!("{}", a.ip())),
-        "protocol" => format!("{:?}", info.version()),
-    );
 }
 
 async fn metrics_handler() -> Result<impl Reply, Rejection> {

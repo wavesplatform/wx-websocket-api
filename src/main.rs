@@ -7,7 +7,6 @@ mod models;
 mod refresher;
 mod repo;
 mod server;
-mod shard;
 mod updater;
 mod websocket;
 
@@ -38,8 +37,8 @@ async fn tokio_main() -> Result<(), Error> {
         repo_config.username, repo_config.password, repo_config.host, repo_config.port
     );
 
-    let clients = Arc::new(shard::Sharded::<client::Clients>::new(20));
-    let topics = Arc::new(shard::Sharded::<client::Topics>::new(20));
+    let clients = Arc::new(client::Clients::default());
+    let topics = Arc::new(client::Topics::default());
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
     let pool = bb8::Pool::builder().build(manager).await?;
