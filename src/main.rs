@@ -14,6 +14,7 @@ use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
 use repo::{Refresher, RepoImpl};
 use std::sync::Arc;
+use tokio::signal::unix::{signal, SignalKind};
 use wavesexchange_log::{debug, error, info};
 
 fn main() -> Result<(), Error> {
@@ -86,10 +87,16 @@ async fn tokio_main() -> Result<(), Error> {
         Ok(())
     };
 
+    let mut sigterm_stream =
+        signal(SignalKind::terminate()).expect("error occured while creating sigterm stream");
+
     tokio::select! {
         _ =
         tokio::signal::ctrl_c() => {
             debug!("got sigint");
+        },
+        _ = sigterm_stream.recv() => {
+            debug!("got sigterm");
         },
         _ = refresher_handle => {
             debug!("refresher finished");
