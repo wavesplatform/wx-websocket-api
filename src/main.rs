@@ -43,7 +43,7 @@ async fn tokio_main() -> Result<(), Error> {
     let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl));
 
     let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
-    let refresher_handle = tokio::task::spawn(async move { refresher.run().await });
+    let refresher_handle = tokio::spawn(async move { refresher.run().await });
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -78,7 +78,7 @@ async fn tokio_main() -> Result<(), Error> {
     let server_handler = tokio::spawn(server);
 
     let updates_future = async {
-        if let Err(e) = tokio::try_join!(websocket_updates_handler_handle, refresher_handle,) {
+        if let Err(e) = tokio::try_join!(websocket_updates_handler_handle,) {
             let err = Error::from(e);
             error!("got an error: {}", err);
             return Err(err);
@@ -90,6 +90,9 @@ async fn tokio_main() -> Result<(), Error> {
         _ =
         tokio::signal::ctrl_c() => {
             debug!("got sigint");
+        },
+        _ = refresher_handle => {
+            debug!("refresher finished");
         },
         _ = updater_handle => {
             debug!("updater finished");

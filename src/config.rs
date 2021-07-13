@@ -46,14 +46,35 @@ struct FlatRepoConfig {
 }
 
 pub mod app {
+    use crate::error::Error;
+
     #[derive(Debug, serde::Deserialize)]
+    struct FlatConfig {
+        pub updater_timeout_in_secs: Option<i64>,
+    }
+
+    #[derive(Debug)]
     pub struct Config {
         pub updater_timeout: Option<std::time::Duration>,
     }
 
-    pub fn load() -> Result<Config, crate::error::Error> {
-        let config = envy::from_env::<Config>()?;
-        Ok(config)
+    pub fn load() -> Result<Config, Error> {
+        let flat_config = envy::from_env::<FlatConfig>()?;
+
+        let updater_timeout_in_secs = match flat_config.updater_timeout_in_secs {
+            Some(updater_timeout_in_secs) if updater_timeout_in_secs > 0 => Ok(Some(
+                std::time::Duration::from_secs(updater_timeout_in_secs as u64),
+            )),
+            Some(updater_timeout_in_secs) if updater_timeout_in_secs < 0 => Ok(None),
+            None => Ok(None),
+            _ => Err(Error::ConfigLoadError(envy::Error::Custom(
+                "Updater timeout cannot be zero".to_string(),
+            ))),
+        }?;
+
+        Ok(Config {
+            updater_timeout: updater_timeout_in_secs,
+        })
     }
 }
 
