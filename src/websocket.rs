@@ -298,11 +298,19 @@ pub async fn updates_handler(
                 }
             }) {
                 debug!("send update to the client#{:?} {:?}", client_id, topic);
-                client
-                    .lock()
-                    .await
-                    .send_update(&topic, value.to_owned())
-                    .expect("error occured while sending message")
+                loop {
+                    match client.try_lock() {
+                        Ok(mut client_lock) => {
+                            client_lock
+                                .send_update(&topic, value.to_owned())
+                                .expect("error occured while sending message");
+                            break;
+                        }
+                        Err(_) => {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                        }
+                    }
+                }
             }
 
             let broadcasting_end = Instant::now();
