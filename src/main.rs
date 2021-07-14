@@ -17,7 +17,7 @@ use refresher::KeysRefresher;
 use repo::RepoImpl;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
-use wavesexchange_log::{debug, error, info};
+use wavesexchange_log::{debug, error};
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -50,16 +50,16 @@ async fn tokio_main() -> Result<(), Error> {
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-    let websocket_updates_handler_handle = tokio::spawn({
-        info!("websocket updates handler started");
-        websocket::updates_handler(updates_receiver, clients.clone(), topics.clone())
-    });
+    let websocket_updates_handler_handle = tokio::spawn(websocket::updates_handler(
+        updates_receiver,
+        clients.clone(),
+        topics.clone(),
+    ));
 
     let redis_conn = redis::Client::open(redis_connection_url)?;
     let conn = redis_conn.clone();
 
     let updater_handle = tokio::task::spawn_blocking(move || {
-        info!("updater started");
         let err = updater::run(conn, app_config.updater_timeout, updates_sender);
         error!("updater returned an err: {:?}", err);
         err
@@ -80,15 +80,6 @@ async fn tokio_main() -> Result<(), Error> {
     );
     let server_handler = tokio::spawn(server);
 
-    let updates_future = async {
-        if let Err(e) = tokio::try_join!(websocket_updates_handler_handle,) {
-            let err = Error::from(e);
-            error!("got an error: {}", err);
-            return Err(err);
-        };
-        Ok(())
-    };
-
     let mut sigterm_stream =
         signal(SignalKind::terminate()).expect("error occured while creating sigterm stream");
 
@@ -100,14 +91,14 @@ async fn tokio_main() -> Result<(), Error> {
         _ = sigterm_stream.recv() => {
             debug!("got sigterm");
         },
-        _ = keys_refresher_handle => {
-            debug!("keys_refresher finished");
+        r = keys_refresher_handle => {
+            error!("keys_refresher finished: {:?}", r);
         },
-        _ = updater_handle => {
-            debug!("updater finished");
+        r = updater_handle => {
+            error!("updater finished: {:?}", r);
         },
-        _ = updates_future => {
-            debug!("updates finished");
+        r = websocket_updates_handler_handle => {
+            error!("websocket updates handler finished: {:?}", r);
         }
     }
 

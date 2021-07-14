@@ -277,6 +277,8 @@ pub async fn updates_handler(
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) {
+    info!("websocket updates handler started");
+
     while let Some((topic, value)) = updates_receiver.recv().await {
         debug!("handled new update {:?}", topic);
         let maybe_client_ids = topics

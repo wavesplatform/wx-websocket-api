@@ -8,6 +8,8 @@ pub fn run(
     updater_timeout: Option<std::time::Duration>,
     updates_sender: tokio::sync::mpsc::UnboundedSender<(Topic, String)>,
 ) -> Result<(), Error> {
+    info!("updater started");
+
     loop {
         debug!("get new redis connection");
 
