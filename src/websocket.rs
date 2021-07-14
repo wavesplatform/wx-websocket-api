@@ -137,7 +137,7 @@ async fn run<R: Repo>(
             // outcome message (to ws)
             msg = client_rx.recv() => {
                 if let Some(message) = msg {
-                    debug!("send message to the client, {:?}", message);
+                    debug!("send message to the client#{:?}, {:?}", client_id, message);
                     if let Err(err) = socket.send(message).await {
                         let request_id = client.lock().await.get_request_id().clone();
                         error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
