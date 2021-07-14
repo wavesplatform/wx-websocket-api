@@ -1,6 +1,7 @@
 use futures::{stream, SinkExt, StreamExt};
 use std::convert::TryFrom;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
 use wavesexchange_log::{debug, error, info};
@@ -283,7 +284,10 @@ pub async fn updates_handler(
             .await
             .get_client_ids(&topic)
             .cloned();
+
         if let Some(client_ids) = maybe_client_ids {
+            let broadcasting_start = Instant::now();
+
             // NB: 1st implementation iterate over client_ids -> found shard for client_id -> acquire shard read lock -> get client -> send
             // but it sometimes leads to deadlock (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
             for (client_id, client) in clients.iter().filter_map(|item| {
@@ -300,7 +304,15 @@ pub async fn updates_handler(
                     .send_update(&topic, value.to_owned())
                     .expect("error occured while sending message")
             }
+
+            let broadcasting_end = Instant::now();
+            debug!(
+                "update successfully sent to {} clients for {} ms",
+                client_ids.iter().count(),
+                broadcasting_end
+                    .duration_since(broadcasting_start)
+                    .as_millis()
+            );
         }
-        debug!("update successfully sent");
     }
 }
