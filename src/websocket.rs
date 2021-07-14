@@ -108,7 +108,7 @@ async fn run<R: Repo>(
                         continue
                     }
 
-                    if match handle_message(&repo, client, client_id, topics, &msg).await {
+                    if match handle_income_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {:?} – {}", msg, error);
@@ -137,6 +137,7 @@ async fn run<R: Repo>(
             // outcome message (to ws)
             msg = client_rx.recv() => {
                 if let Some(message) = msg {
+                    debug!("send message to the client, {:?}", message);
                     if let Err(err) = socket.send(message).await {
                         let request_id = client.lock().await.get_request_id().clone();
                         error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
@@ -163,7 +164,7 @@ async fn run<R: Repo>(
     }
 }
 
-async fn handle_message<R: Repo>(
+async fn handle_income_message<R: Repo>(
     repo: &Arc<R>,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
@@ -277,6 +278,7 @@ pub async fn updates_handler(
     topics: Arc<Sharded<Topics>>,
 ) {
     while let Some((topic, value)) = updates_receiver.recv().await {
+        debug!("handled new update {:?}", topic);
         let maybe_client_ids = topics
             .get(&topic)
             .read()
@@ -286,6 +288,7 @@ pub async fn updates_handler(
         if let Some(client_ids) = maybe_client_ids {
             for client_id in client_ids {
                 if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
+                    debug!("send update to the client#{:?} {:?}", client_id, topic);
                     client
                         .lock()
                         .await
