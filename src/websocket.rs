@@ -25,7 +25,7 @@ pub struct HandleConnectionOptions {
 
 pub async fn handle_connection<R: Repo>(
     mut socket: ws::WebSocket,
-    clients: Arc<Sharded<Clients>>,
+    clients: Arc<Clients>,
     topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
@@ -42,11 +42,7 @@ pub async fn handle_connection<R: Repo>(
 
     CLIENTS.inc();
 
-    clients
-        .get(&client_id)
-        .write()
-        .await
-        .insert(client_id, client.clone());
+    clients.insert(client_id, client.clone());
 
     // ws connection messages processing
     let run_handler = run(
@@ -239,7 +235,7 @@ async fn on_disconnect(
     mut socket: ws::WebSocket,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
-    clients: Arc<Sharded<Clients>>,
+    clients: Arc<Clients>,
     topics: Arc<Sharded<Topics>>,
 ) -> () {
     let client_lock = client.lock().await;
@@ -263,7 +259,7 @@ async fn on_disconnect(
         "req_id" => client_lock.get_request_id().clone()
     );
 
-    clients.get(&client_id).write().await.remove(&client_id);
+    clients.remove(&client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
@@ -274,7 +270,7 @@ async fn on_disconnect(
 
 pub async fn updates_handler(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Arc<Sharded<Clients>>,
+    clients: Arc<Clients>,
     topics: Arc<Sharded<Topics>>,
 ) {
     info!("websocket updates handler started");
@@ -290,22 +286,19 @@ pub async fn updates_handler(
         if let Some(client_ids) = maybe_client_ids {
             // NB: 1st implementation iterate over client_ids -> found shard for client_id -> acquire shard read lock -> get client -> send
             // but it sometimes leads to deadlock (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
-            for clients_shard in clients.into_iter() {
-                let clients_guard = clients_shard.read().await;
-                for (client_id, client) in clients_guard.iter().filter_map(|(client_id, client)| {
-                    if client_ids.contains(client_id) {
-                        Some((client_id, client))
-                    } else {
-                        None
-                    }
-                }) {
-                    debug!("send update to the client#{:?} {:?}", client_id, topic);
-                    client
-                        .lock()
-                        .await
-                        .send_update(&topic, value.to_owned())
-                        .expect("error occured while sending message")
+            for (client_id, client) in clients.iter().filter_map(|item| {
+                if client_ids.contains(&item.key()) {
+                    Some((item.key().clone(), item.value().clone()))
+                } else {
+                    None
                 }
+            }) {
+                debug!("send update to the client#{:?} {:?}", client_id, topic);
+                client
+                    .lock()
+                    .await
+                    .send_update(&topic, value.to_owned())
+                    .expect("error occured while sending message")
             }
         }
         debug!("update successfully sent");
