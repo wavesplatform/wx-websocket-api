@@ -20,8 +20,6 @@ pub fn run(
         loop {
             match pubsub.get_message() {
                 Ok(msg) => {
-                    debug!("got msg from redis: {:?}", msg);
-
                     if let Ok(topic) = Topic::try_from(msg.get_channel_name()) {
                         let value = msg.get_payload::<String>()?;
                         updates_sender

@@ -50,11 +50,15 @@ async fn tokio_main() -> Result<(), Error> {
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-    let websocket_updates_handler_handle = tokio::spawn(websocket::updates_handler(
-        updates_receiver,
-        clients.clone(),
-        topics.clone(),
-    ));
+    let websocket_updates_handler_handle = {
+        let clients = clients.clone();
+        let topics = topics.clone();
+        tokio::task::spawn(websocket::updates_handler(
+            updates_receiver,
+            clients,
+            topics,
+        ))
+    };
 
     let redis_conn = redis::Client::open(redis_connection_url)?;
     let conn = redis_conn.clone();
