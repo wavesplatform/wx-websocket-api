@@ -288,8 +288,17 @@ pub async fn updates_handler(
             .get_client_ids(&topic)
             .cloned();
         if let Some(client_ids) = maybe_client_ids {
-            for client_id in client_ids {
-                if let Some(client) = clients.get(&client_id).read().await.get(&client_id) {
+            // NB: 1st implementation iterate over client_ids -> found shard for client_id -> acquire shard read lock -> get client -> send
+            // but it sometimes leads to deadlock (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
+            for clients_shard in clients.into_iter() {
+                let clients_guard = clients_shard.read().await;
+                for (client_id, client) in clients_guard.iter().filter_map(|(client_id, client)| {
+                    if client_ids.contains(client_id) {
+                        Some((client_id, client))
+                    } else {
+                        None
+                    }
+                }) {
                     debug!("send update to the client#{:?} {:?}", client_id, topic);
                     client
                         .lock()
