@@ -166,6 +166,7 @@ async fn run<R: Repo>(
                                 error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
                                 break;
                             }
+                            break;
                         }
                         Err(_) => {
                             debug!(
