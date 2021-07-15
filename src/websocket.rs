@@ -18,7 +18,11 @@ const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
 const INVALID_TOPIC_ERROR_CODE: u16 = 3;
 
-const LOCKED_CLIENT_SLEEP_DURATION_IN_MS: u64 = 100;
+// different duration to avoid starvation
+const LOCKED_CLIENT_ON_PING_SENDING_SLEEP_DURATION_IN_MS: u64 = 10;
+const LOCKED_CLIENT_ON_ERROR_SENDING_SLEEP_DURATION_IN_MS: u64 = 50;
+const LOCKED_CLIENT_ON_INCOME_MESSAGE_HANDLING_SLEEP_DURATION_IN_MS: u64 = 100;
+const LOCKED_CLIENT_ON_UPDATE_SLEEP_DURATION_IN_MS: u64 = 200;
 
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
@@ -112,14 +116,14 @@ async fn run<R: Repo>(
                     }
 
                     if match handle_income_message(&repo, client, client_id, topics, &msg).await {
-                        Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client).await,
+                        Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client, client_id).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {:?} – {}", msg, error);
-                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client, client_id).await
                         }
                         Err(Error::UrlParseError(error)) => {
                             let error = format!("Invalid topic format: {:?} – {:?}", msg, error);
-                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client).await
+                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client, client_id).await
                         }
                         Err(Error::InvalidPongMessage) => {
                             // nothing to do
@@ -151,15 +155,29 @@ async fn run<R: Repo>(
             }
             // ping
             _ = interval.tick() => {
-                let mut client_lock = client.lock().await;
-
-                if client_lock.pings_len() >= options.ping_failures_threshold {
-                    debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
-                    break;
-                }
-                if let Err(error) = client_lock.send_ping() {
-                    error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
-                    break;
+                loop {
+                    match client.try_lock() {
+                        Ok(mut client_lock) => {
+                            if client_lock.pings_len() >= options.ping_failures_threshold {
+                                debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
+                                break;
+                            }
+                            if let Err(error) = client_lock.send_ping() {
+                                error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            debug!(
+                                "client #{} is locked while ping sending, try to wait",
+                                client_id
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                LOCKED_CLIENT_ON_PING_SENDING_SLEEP_DURATION_IN_MS,
+                            ))
+                            .await;
+                        }
+                    }
                 }
             },
         }
@@ -175,53 +193,69 @@ async fn handle_income_message<R: Repo>(
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(raw_msg)?;
 
-    match msg {
-        IncomeMessage::Pong(pong) => client.lock().await.handle_pong(pong.message_number),
-        IncomeMessage::Subscribe {
-            topic: client_subscription_key,
-        } => {
-            let topic = Topic::try_from(&client_subscription_key)?;
-            let subscription_key = String::from(topic.clone());
+    loop {
+        match client.try_lock() {
+            Ok(mut client_lock) => {
+                match msg {
+                    IncomeMessage::Pong(pong) => {
+                        client_lock.handle_pong(pong.message_number)?;
+                    }
+                    IncomeMessage::Subscribe {
+                        topic: client_subscription_key,
+                    } => {
+                        let topic = Topic::try_from(&client_subscription_key)?;
+                        let subscription_key = String::from(topic.clone());
 
-            let mut client_lock = client.lock().await;
+                        if client_lock.contains_subscription(&topic) {
+                            let message =
+                                "You are already subscribed for the specified topic".to_string();
+                            client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
+                        } else {
+                            let mut topics_lock = topics.get(&topic).write().await;
+                            repo.subscribe(subscription_key.clone()).await?;
+                            client_lock
+                                .add_subscription(topic.clone(), client_subscription_key.clone());
+                            if let Some(value) = repo.get_by_key(&subscription_key).await? {
+                                client_lock.send_subscribed(&topic, value)?;
+                            } else {
+                                client_lock.add_new_subscription(topic.clone());
+                            }
+                            topics_lock.add_subscription(topic, *client_id);
+                        }
+                    }
+                    IncomeMessage::Unsubscribe {
+                        topic: client_subscription_key,
+                    } => {
+                        let topic = Topic::try_from(&client_subscription_key)?;
 
-            if client_lock.contains_subscription(&topic) {
-                let message = "You are already subscribed for the specified topic".to_string();
-                client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
-            } else {
-                let mut topics_lock = topics.get(&topic).write().await;
-                repo.subscribe(subscription_key.clone()).await?;
-                client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
-                if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                    client_lock.send_subscribed(&topic, value)?;
-                } else {
-                    client_lock.add_new_subscription(topic.clone());
+                        if client_lock.contains_subscription(&topic) {
+                            client_lock.remove_subscription(&topic);
+                            topics
+                                .get(&topic)
+                                .write()
+                                .await
+                                .remove_subscription(&topic, client_id);
+                        }
+
+                        client_lock.send_unsubscribed(client_subscription_key)?;
+                    }
                 }
-                topics_lock.add_subscription(topic, *client_id);
+                break;
             }
-
-            Ok(())
-        }
-        IncomeMessage::Unsubscribe {
-            topic: client_subscription_key,
-        } => {
-            let topic = Topic::try_from(&client_subscription_key)?;
-            let mut client_lock = client.lock().await;
-
-            if client_lock.contains_subscription(&topic) {
-                client_lock.remove_subscription(&topic);
-                topics
-                    .get(&topic)
-                    .write()
-                    .await
-                    .remove_subscription(&topic, client_id);
+            Err(_) => {
+                debug!(
+                    "client #{} is locked while income message handling, try to wait",
+                    client_id
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    LOCKED_CLIENT_ON_INCOME_MESSAGE_HANDLING_SLEEP_DURATION_IN_MS,
+                ))
+                .await;
             }
-
-            client_lock.send_unsubscribed(client_subscription_key)?;
-
-            Ok(())
         }
     }
+
+    Ok(())
 }
 
 async fn send_error(
@@ -229,13 +263,31 @@ async fn send_error(
     message: impl Into<String>,
     code: u16,
     client: &Arc<Mutex<Client>>,
+    client_id: &ClientId,
 ) -> Result<(), Error> {
     let mut error_details = std::collections::HashMap::new();
     error_details.insert("reason".to_string(), error.into());
-    client
-        .lock()
-        .await
-        .send_error(code, message.into(), Some(error_details))
+
+    loop {
+        match client.try_lock() {
+            Ok(mut client_lock) => {
+                client_lock.send_error(code, message.into(), Some(error_details))?;
+                break;
+            }
+            Err(_) => {
+                debug!(
+                    "client #{} is locked while error sending, try to wait",
+                    client_id
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    LOCKED_CLIENT_ON_ERROR_SENDING_SLEEP_DURATION_IN_MS,
+                ))
+                .await;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn on_disconnect(
@@ -317,9 +369,12 @@ pub async fn updates_handler(
                                 break;
                             }
                             Err(_) => {
-                                debug!("client #{} is locked, try to wait", client_id);
+                                debug!(
+                                    "client #{} is locked while sending update, try to wait",
+                                    client_id
+                                );
                                 tokio::time::sleep(tokio::time::Duration::from_millis(
-                                    LOCKED_CLIENT_SLEEP_DURATION_IN_MS,
+                                    LOCKED_CLIENT_ON_UPDATE_SLEEP_DURATION_IN_MS,
                                 ))
                                 .await;
                             }
