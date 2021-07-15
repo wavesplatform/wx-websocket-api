@@ -18,6 +18,8 @@ const INVALID_MESSAGE_ERROR_CODE: u16 = 1;
 const ALREADY_SUBSCRIBED_ERROR_CODE: u16 = 2;
 const INVALID_TOPIC_ERROR_CODE: u16 = 3;
 
+const LOCKED_CLIENT_SLEEP_DURATION_IN_MS: u64 = 100;
+
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
     pub ping_interval: tokio::time::Duration,
@@ -54,6 +56,7 @@ pub async fn handle_connection<R: Repo>(
         &mut socket,
         &client,
         &client_id,
+        request_id,
         &topics,
         repo,
         options,
@@ -79,6 +82,7 @@ async fn run<R: Repo>(
     socket: &mut ws::WebSocket,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
+    request_id: Option<String>,
     topics: &Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
@@ -93,37 +97,13 @@ async fn run<R: Repo>(
                     let msg = match next_msg_result {
                         Ok(msg) => msg,
                         Err(disconnected) => {
-                            loop {
-                                match client.try_lock() {
-                                    Ok(client_lock) => {
-                                        let request_id = client_lock.get_request_id().clone();
-                                        debug!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
-                                        break;
-                                    }
-                                    Err(_) => {
-                                        debug!("client #{} is locked, try to wait", client_id);
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                                    }
-                                }
-                            }
+                            debug!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
-                        loop {
-                            match client.try_lock() {
-                                Ok(client_lock) => {
-                                    let request_id = client_lock.get_request_id().clone();
-                                    debug!("client #{} connection was closed", client_id; "req_id" => request_id);
-                                    break;
-                                }
-                                Err(_) => {
-                                    debug!("client #{} is locked, try to wait", client_id);
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                                }
-                            }
-                        }
+                        debug!("client #{} connection was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
@@ -162,19 +142,7 @@ async fn run<R: Repo>(
                 if let Some(message) = msg {
                     debug!("send message to the client#{:?}", client_id);
                     if let Err(err) = socket.send(message).await {
-                        loop {
-                            match client.try_lock() {
-                                Ok(client_lock) => {
-                                    let request_id = client_lock.get_request_id().clone();
-                                    error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
-                                    break;
-                                }
-                                Err(_) => {
-                                    debug!("client #{} is locked, try to wait", client_id);
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                                }
-                            }
-                        }
+                        error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
                         break;
                     }
                 } else {
@@ -183,23 +151,15 @@ async fn run<R: Repo>(
             }
             // ping
             _ = interval.tick() => {
-                loop {
-                    match client.try_lock() {
-                        Ok(mut client_lock) => {
-                            if client_lock.pings_len() >= options.ping_failures_threshold {
-                                debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
-                                break;
-                            }
-                            if let Err(error) = client_lock.send_ping() {
-                                error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            debug!("client #{} is locked, try to wait", client_id);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                        }
-                    }
+                let mut client_lock = client.lock().await;
+
+                if client_lock.pings_len() >= options.ping_failures_threshold {
+                    debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
+                    break;
+                }
+                if let Err(error) = client_lock.send_ping() {
+                    error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
+                    break;
                 }
             },
         }
@@ -222,32 +182,22 @@ async fn handle_income_message<R: Repo>(
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
             let subscription_key = String::from(topic.clone());
-            loop {
-                match client.try_lock() {
-                    Ok(mut client_lock) => {
-                        if client_lock.contains_subscription(&topic) {
-                            let message =
-                                "You are already subscribed for the specified topic".to_string();
-                            client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
-                        } else {
-                            let mut topics_lock = topics.get(&topic).write().await;
-                            repo.subscribe(subscription_key.clone()).await?;
-                            client_lock
-                                .add_subscription(topic.clone(), client_subscription_key.clone());
-                            if let Some(value) = repo.get_by_key(&subscription_key).await? {
-                                client_lock.send_subscribed(&topic, value)?;
-                            } else {
-                                client_lock.add_new_subscription(topic.clone());
-                            }
-                            topics_lock.add_subscription(topic, *client_id);
-                        }
-                        break;
-                    }
-                    Err(_) => {
-                        debug!("client #{} is locked, try to wait", client_id);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                    }
+
+            let mut client_lock = client.lock().await;
+
+            if client_lock.contains_subscription(&topic) {
+                let message = "You are already subscribed for the specified topic".to_string();
+                client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
+            } else {
+                let mut topics_lock = topics.get(&topic).write().await;
+                repo.subscribe(subscription_key.clone()).await?;
+                client_lock.add_subscription(topic.clone(), client_subscription_key.clone());
+                if let Some(value) = repo.get_by_key(&subscription_key).await? {
+                    client_lock.send_subscribed(&topic, value)?;
+                } else {
+                    client_lock.add_new_subscription(topic.clone());
                 }
+                topics_lock.add_subscription(topic, *client_id);
             }
 
             Ok(())
@@ -256,27 +206,18 @@ async fn handle_income_message<R: Repo>(
             topic: client_subscription_key,
         } => {
             let topic = Topic::try_from(&client_subscription_key)?;
-            loop {
-                match client.try_lock() {
-                    Ok(mut client_lock) => {
-                        if client_lock.contains_subscription(&topic) {
-                            client_lock.remove_subscription(&topic);
-                            topics
-                                .get(&topic)
-                                .write()
-                                .await
-                                .remove_subscription(&topic, client_id);
-                        }
+            let mut client_lock = client.lock().await;
 
-                        client_lock.send_unsubscribed(client_subscription_key)?;
-                        break;
-                    }
-                    Err(_) => {
-                        debug!("client #{} is locked, try to wait", client_id);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                    }
-                }
+            if client_lock.contains_subscription(&topic) {
+                client_lock.remove_subscription(&topic);
+                topics
+                    .get(&topic)
+                    .write()
+                    .await
+                    .remove_subscription(&topic, client_id);
             }
+
+            client_lock.send_unsubscribed(client_subscription_key)?;
 
             Ok(())
         }
@@ -304,35 +245,26 @@ async fn on_disconnect(
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) -> () {
-    loop {
-        match client.try_lock() {
-            Ok(client_lock) => {
-                // remove topics from Topics
-                stream::iter(client_lock.subscriptions_iter())
-                    .map(|(topic, _)| (topic, &topics))
-                    .for_each_concurrent(20, |(topic, topics)| async move {
-                        topics
-                            .get(&topic)
-                            .write()
-                            .await
-                            .remove_subscription(topic, &client_id);
-                    })
-                    .await;
+    let client_lock = client.lock().await;
 
-                info!(
-                    "client #{} disconnected; he got {} messages",
-                    client_id,
-                    client_lock.messages_count();
-                    "req_id" => client_lock.get_request_id().clone()
-                );
-                break;
-            }
-            Err(_) => {
-                debug!("client #{} is locked, try to wait", client_id);
-                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-            }
-        }
-    }
+    // remove topics from Topics
+    stream::iter(client_lock.subscriptions_iter())
+        .map(|(topic, _)| (topic, &topics))
+        .for_each_concurrent(20, |(topic, topics)| async move {
+            topics
+                .get(&topic)
+                .write()
+                .await
+                .remove_subscription(topic, &client_id);
+        })
+        .await;
+
+    info!(
+        "client #{} disconnected; he got {} messages",
+        client_id,
+        client_lock.messages_count();
+        "req_id" => client_lock.get_request_id().clone()
+    );
 
     clients.get(&client_id).write().await.remove(&client_id);
 
@@ -386,7 +318,10 @@ pub async fn updates_handler(
                             }
                             Err(_) => {
                                 debug!("client #{} is locked, try to wait", client_id);
-                                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    LOCKED_CLIENT_SLEEP_DURATION_IN_MS,
+                                ))
+                                .await;
                             }
                         }
                     }
