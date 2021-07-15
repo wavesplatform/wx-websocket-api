@@ -297,7 +297,7 @@ pub async fn updates_handler(
             // 2st implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
             for shard in clients.into_iter() {
                 for (client_id, client) in
-                    shard.read().await.iter().filter_map(|(client_id, client)| {
+                    shard.write().await.iter().filter_map(|(client_id, client)| {
                         if client_ids.contains(&client_id) {
                             Some((client_id, client))
                         } else {
