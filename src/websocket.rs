@@ -297,7 +297,7 @@ pub async fn updates_handler(
             // 2st implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
             for shard in clients.into_iter() {
                 for (client_id, client) in
-                    shard.write().await.iter().filter_map(|(client_id, client)| {
+                    shard.read().await.iter().filter_map(|(client_id, client)| {
                         if client_ids.contains(&client_id) {
                             Some((client_id, client))
                         } else {
@@ -315,8 +315,8 @@ pub async fn updates_handler(
                                 break;
                             }
                             Err(_) => {
-                                debug!("client is locked, try to wait");
-                                tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+                                debug!("client #{} is locked, try to wait", client_id);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                             }
                         }
                     }
