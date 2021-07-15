@@ -336,7 +336,14 @@ async fn on_disconnect(
         }
     }
 
+    debug!(
+        "client#{} subscribtions cleared; remove him from clients",
+        client_id
+    );
+
     clients.get(&client_id).write().await.remove(&client_id);
+
+    debug!("client#{} removed from clients", client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
