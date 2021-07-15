@@ -200,8 +200,11 @@ impl Client {
     }
 
     fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
-        self.message_counter += 1;
-        self.sender.send(Message::from(message))?;
+        if !self.sender.is_closed() {
+            self.message_counter += 1;
+            self.sender.send(Message::from(message))?;
+        }
+        
         Ok(())
     }
 }
