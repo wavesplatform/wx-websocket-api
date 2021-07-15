@@ -23,6 +23,7 @@ const LOCKED_CLIENT_ON_PING_SENDING_SLEEP_DURATION_IN_MS: u64 = 10;
 const LOCKED_CLIENT_ON_ERROR_SENDING_SLEEP_DURATION_IN_MS: u64 = 50;
 const LOCKED_CLIENT_ON_INCOME_MESSAGE_HANDLING_SLEEP_DURATION_IN_MS: u64 = 100;
 const LOCKED_CLIENT_ON_UPDATE_SLEEP_DURATION_IN_MS: u64 = 200;
+const LOCKED_CLIENT_ON_DISCONNECTING_SLEEP_DURATION_IN_MS: u64 = 300;
 
 #[derive(Clone, Debug)]
 pub struct HandleConnectionOptions {
@@ -298,26 +299,42 @@ async fn on_disconnect(
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) -> () {
-    let client_lock = client.lock().await;
+    loop {
+        match client.try_lock() {
+            Ok(client_lock) => {
+                // remove topics from Topics
+                stream::iter(client_lock.subscriptions_iter())
+                    .map(|(topic, _)| (topic, &topics))
+                    .for_each_concurrent(20, |(topic, topics)| async move {
+                        topics
+                            .get(&topic)
+                            .write()
+                            .await
+                            .remove_subscription(topic, &client_id);
+                    })
+                    .await;
 
-    // remove topics from Topics
-    stream::iter(client_lock.subscriptions_iter())
-        .map(|(topic, _)| (topic, &topics))
-        .for_each_concurrent(20, |(topic, topics)| async move {
-            topics
-                .get(&topic)
-                .write()
-                .await
-                .remove_subscription(topic, &client_id);
-        })
-        .await;
+                info!(
+                    "client #{} disconnected; he got {} messages",
+                    client_id,
+                    client_lock.messages_count();
+                    "req_id" => client_lock.get_request_id().clone()
+                );
 
-    info!(
-        "client #{} disconnected; he got {} messages",
-        client_id,
-        client_lock.messages_count();
-        "req_id" => client_lock.get_request_id().clone()
-    );
+                break;
+            }
+            Err(_) => {
+                debug!(
+                    "client #{} is locked while disconnecting, try to wait",
+                    client_id
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    LOCKED_CLIENT_ON_DISCONNECTING_SLEEP_DURATION_IN_MS,
+                ))
+                .await;
+            }
+        }
+    }
 
     clients.get(&client_id).write().await.remove(&client_id);
 
