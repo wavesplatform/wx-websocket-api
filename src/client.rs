@@ -1,7 +1,6 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
 use crate::metrics::MESSAGES;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -207,7 +206,7 @@ impl Client {
     }
 }
 
-pub type Clients = DashMap<ClientId, Arc<Mutex<Client>>>;
+pub type Clients = RwLock<HashMap<ClientId, Arc<Mutex<Client>>>>;
 pub type Topics = RwLock<ClientIdsByTopics>;
 
 #[derive(Default, Debug)]

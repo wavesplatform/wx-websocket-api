@@ -25,7 +25,7 @@ pub struct ServerOptions {
 pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
-    clients: Arc<Clients>,
+    clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
     options: ServerOptions,
     shutdown_signal: tokio::sync::mpsc::Sender<()>,

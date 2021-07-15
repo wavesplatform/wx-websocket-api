@@ -26,7 +26,7 @@ pub struct HandleConnectionOptions {
 
 pub async fn handle_connection<R: Repo>(
     mut socket: ws::WebSocket,
-    clients: Arc<Clients>,
+    clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
@@ -43,7 +43,11 @@ pub async fn handle_connection<R: Repo>(
 
     CLIENTS.inc();
 
-    clients.insert(client_id, client.clone());
+    clients
+        .get(&client_id)
+        .write()
+        .await
+        .insert(client_id, client.clone());
 
     // ws connection messages processing
     let run_handler = run(
@@ -236,7 +240,7 @@ async fn on_disconnect(
     mut socket: ws::WebSocket,
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
-    clients: Arc<Clients>,
+    clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) -> () {
     let client_lock = client.lock().await;
@@ -260,7 +264,7 @@ async fn on_disconnect(
         "req_id" => client_lock.get_request_id().clone()
     );
 
-    clients.remove(&client_id);
+    clients.get(&client_id).write().await.remove(&client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
@@ -271,7 +275,7 @@ async fn on_disconnect(
 
 pub async fn updates_handler(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
-    clients: Arc<Clients>,
+    clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
 ) {
     info!("websocket updates handler started");
@@ -288,26 +292,32 @@ pub async fn updates_handler(
         if let Some(client_ids) = maybe_client_ids {
             let broadcasting_start = Instant::now();
 
-            // NB: 1st implementation iterate over client_ids -> found shard for client_id -> acquire shard read lock -> get client -> send
-            // but it sometimes leads to deadlock (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
-            for (client_id, client) in clients.iter().filter_map(|item| {
-                if client_ids.contains(&item.key()) {
-                    Some((item.key().clone(), item.value().clone()))
-                } else {
-                    None
-                }
-            }) {
-                debug!("send update to the client#{:?} {:?}", client_id, topic);
-                loop {
-                    match client.try_lock() {
-                        Ok(mut client_lock) => {
-                            client_lock
-                                .send_update(&topic, value.to_owned())
-                                .expect("error occured while sending message");
-                            break;
+            // NB: 1st implementation iterate over client_ids -> find shard for client_id -> acquire shard read lock -> get client lock -> send update
+            // but it sometimes leads to deadlock|livelock|star (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
+            // 2st implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
+            for shard in clients.into_iter() {
+                for (client_id, client) in
+                    shard.read().await.iter().filter_map(|(client_id, client)| {
+                        if client_ids.contains(&client_id) {
+                            Some((client_id, client))
+                        } else {
+                            None
                         }
-                        Err(_) => {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                    })
+                {
+                    debug!("send update to the client#{:?} {:?}", client_id, topic);
+                    loop {
+                        match client.try_lock() {
+                            Ok(mut client_lock) => {
+                                client_lock
+                                    .send_update(&topic, value.to_owned())
+                                    .expect("error occured while sending message");
+                                break;
+                            }
+                            Err(_) => {
+                                debug!("client is locked, try to wait");
+                                tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+                            }
                         }
                     }
                 }
@@ -321,6 +331,8 @@ pub async fn updates_handler(
                     .duration_since(broadcasting_start)
                     .as_millis()
             );
+        } else {
+            debug!("there are not any clients to send update");
         }
     }
 }
