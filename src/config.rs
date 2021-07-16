@@ -20,7 +20,7 @@ fn default_client_ping_failures_threshold() -> u16 {
     3
 }
 
-fn default_ttl() -> u64 {
+fn default_key_ttl() -> u64 {
     60
 }
 
@@ -41,8 +41,41 @@ struct FlatRepoConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
-    #[serde(default = "default_ttl")]
-    pub ttl: u64,
+    #[serde(default = "default_key_ttl")]
+    pub key_ttl: u64,
+}
+
+pub mod app {
+    use crate::error::Error;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct FlatConfig {
+        pub updater_timeout_in_secs: Option<i64>,
+    }
+
+    #[derive(Debug)]
+    pub struct Config {
+        pub updater_timeout: Option<std::time::Duration>,
+    }
+
+    pub fn load() -> Result<Config, Error> {
+        let flat_config = envy::from_env::<FlatConfig>()?;
+
+        let updater_timeout_in_secs = match flat_config.updater_timeout_in_secs {
+            Some(updater_timeout_in_secs) if updater_timeout_in_secs > 0 => Ok(Some(
+                std::time::Duration::from_secs(updater_timeout_in_secs as u64),
+            )),
+            Some(updater_timeout_in_secs) if updater_timeout_in_secs < 0 => Ok(None),
+            None => Ok(None),
+            _ => Err(Error::ConfigLoadError(envy::Error::Custom(
+                "Updater timeout cannot be zero".to_string(),
+            ))),
+        }?;
+
+        Ok(Config {
+            updater_timeout: updater_timeout_in_secs,
+        })
+    }
 }
 
 pub fn load_repo() -> Result<repo::Config, Error> {
@@ -53,7 +86,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
         port: flat_config.port,
         username: flat_config.username,
         password: flat_config.password,
-        ttl: Duration::from_secs(flat_config.ttl),
+        key_ttl: Duration::from_secs(flat_config.key_ttl),
     })
 }
 

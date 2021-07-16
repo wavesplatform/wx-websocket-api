@@ -4,6 +4,7 @@ mod error;
 mod messages;
 mod metrics;
 mod models;
+mod refresher;
 mod repo;
 mod server;
 mod shard;
@@ -12,9 +13,11 @@ mod websocket;
 
 use bb8_redis::{bb8, RedisConnectionManager};
 use error::Error;
-use repo::{Refresher, RepoImpl};
+use refresher::KeysRefresher;
+use repo::RepoImpl;
 use std::sync::Arc;
-use wavesexchange_log::{error, info};
+use tokio::signal::unix::{signal, SignalKind};
+use wavesexchange_log::{debug, error};
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -24,6 +27,7 @@ fn main() -> Result<(), Error> {
 }
 
 async fn tokio_main() -> Result<(), Error> {
+    let app_config = config::app::load()?;
     let repo_config = config::load_repo()?;
     let server_config = config::load_server()?;
 
@@ -39,47 +43,72 @@ async fn tokio_main() -> Result<(), Error> {
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
     let pool = bb8::Pool::builder().build(manager).await?;
-    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.ttl));
+    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.key_ttl));
 
-    let refresher = Refresher::new(repo.clone(), repo_config.ttl, topics.clone());
-    let refresher_handle = tokio::spawn(async move { refresher.run().await });
+    let keys_refresher = KeysRefresher::new(repo.clone(), repo_config.key_ttl, topics.clone());
+    let keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-    let updates_handler_handle = tokio::task::spawn({
-        info!("updates handler started");
-        websocket::updates_handler(updates_receiver, clients.clone(), topics.clone())
-    });
+    let websocket_updates_handler_handle = {
+        let clients = clients.clone();
+        let topics = topics.clone();
+        tokio::task::spawn(websocket::updates_handler(
+            updates_receiver,
+            clients,
+            topics,
+        ))
+    };
 
     let redis_conn = redis::Client::open(redis_connection_url)?;
     let conn = redis_conn.clone();
-    let updates_handle = tokio::task::spawn_blocking(move || {
-        info!("updater started");
-        updater::run(conn, updates_sender)
+
+    let updater_handle = tokio::task::spawn_blocking(move || {
+        let err = updater::run(conn, app_config.updater_timeout, updates_sender);
+        error!("updater returned an err: {:?}", err);
+        err
     });
 
     let server_options = server::ServerOptions {
         client_ping_interval: tokio::time::Duration::from_secs(server_config.client_ping_interval),
         client_ping_failures_threshold: server_config.client_ping_failures_threshold,
     };
-    let (server_stop_tx, server) =
-        server::start(server_config.port, repo, clients, topics, server_options);
+    let (shutdown_signal_tx, mut shutdown_signal_rx) = tokio::sync::mpsc::channel(1);
+    let (server_stop_tx, server) = server::start(
+        server_config.port,
+        repo,
+        clients,
+        topics,
+        server_options,
+        shutdown_signal_tx,
+    );
     let server_handler = tokio::spawn(server);
 
-    let updates_future = async {
-        if let Err(e) = tokio::try_join!(updates_handler_handle, updates_handle, refresher_handle,)
-        {
-            let err = Error::from(e);
-            error!("{}", err);
-            return Err(err);
-        };
-        Ok(())
-    };
-    let signal = tokio::signal::ctrl_c();
+    let mut sigterm_stream =
+        signal(SignalKind::terminate()).expect("error occured while creating sigterm stream");
+
     tokio::select! {
-        _ = signal => {},
-        _ = updates_future => {}
+        _ =
+        tokio::signal::ctrl_c() => {
+            debug!("got sigint");
+        },
+        _ = sigterm_stream.recv() => {
+            debug!("got sigterm");
+        },
+        r = keys_refresher_handle => {
+            error!("keys_refresher finished: {:?}", r);
+        },
+        r = updater_handle => {
+            error!("updater finished: {:?}", r);
+        },
+        r = websocket_updates_handler_handle => {
+            error!("websocket updates handler finished: {:?}", r);
+        }
     }
+
+    // graceful shutdown for websocket connections
+    shutdown_signal_rx.close();
+
     let _ = server_stop_tx.send(());
     server_handler.await?;
     Ok(())
