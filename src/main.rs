@@ -85,7 +85,7 @@ async fn tokio_main() -> Result<(), Error> {
     let server_handler = tokio::spawn(server);
 
     let mut sigterm_stream =
-        signal(SignalKind::terminate()).expect("error occured while creating sigterm stream");
+        signal(SignalKind::terminate()).expect("error occurred while creating sigterm stream");
 
     tokio::select! {
         _ =

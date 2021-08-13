@@ -132,12 +132,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occured while processing client #{} message: {:?} – {:?}", client_id, msg, err);
+                            error!("error occurred while processing client #{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("error occured while sending message to client #{}", client_id);
+                        error!("error occurred while sending message to client #{}", client_id);
                         break;
                     }
                 }
@@ -164,7 +164,7 @@ async fn run<R: Repo>(
                                 break;
                             }
                             if let Err(error) = client_lock.send_ping() {
-                                error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
+                                error!("error occurred while sending ping message to client #{}: {:?}", client_id, error);
                                 break;
                             }
                             break;
@@ -337,7 +337,7 @@ async fn on_disconnect(
     }
 
     debug!(
-        "client#{} subscribtions cleared; remove him from clients",
+        "client#{} subscriptions cleared; remove him from clients",
         client_id
     );
 
@@ -373,7 +373,7 @@ pub async fn updates_handler(
 
             // NB: 1st implementation iterate over client_ids -> find shard for client_id -> acquire shard read lock -> get client lock -> send update
             // but it sometimes leads to deadlock|livelock|star (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
-            // 2st implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
+            // 2nd implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
             for shard in clients.into_iter() {
                 for (client_id, client) in
                     shard.read().await.iter().filter_map(|(client_id, client)| {
@@ -390,7 +390,7 @@ pub async fn updates_handler(
                             Ok(mut client_lock) => {
                                 client_lock
                                     .send_update(&topic, value.to_owned())
-                                    .expect("error occured while sending message");
+                                    .expect("error occurred while sending message");
                                 break;
                             }
                             Err(_) => {
