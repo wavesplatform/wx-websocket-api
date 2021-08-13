@@ -57,6 +57,7 @@ async fn tokio_main() -> Result<(), Error> {
             updates_receiver,
             clients,
             topics,
+            repo.clone(),
         ))
     };
 
