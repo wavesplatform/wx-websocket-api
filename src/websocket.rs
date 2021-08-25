@@ -1,11 +1,14 @@
 use futures::{stream, SinkExt, StreamExt};
+use serde::Serialize;
+use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
 use wavesexchange_log::{debug, error, info};
-use wavesexchange_topic::Topic;
+use wavesexchange_topic::{State, StateSingle, Topic};
 
 use crate::client::{Client, ClientId, Clients, Topics};
 use crate::error::Error;
@@ -132,12 +135,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occured while processing client #{} message: {:?} – {:?}", client_id, msg, err);
+                            error!("error occurred while processing client #{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("error occured while sending message to client #{}", client_id);
+                        error!("error occurred while sending message to client #{}", client_id);
                         break;
                     }
                 }
@@ -164,7 +167,7 @@ async fn run<R: Repo>(
                                 break;
                             }
                             if let Err(error) = client_lock.send_ping() {
-                                error!("error occured while sending ping message to client #{}: {:?}", client_id, error);
+                                error!("error occurred while sending ping message to client #{}: {:?}", client_id, error);
                                 break;
                             }
                             break;
@@ -217,12 +220,30 @@ async fn handle_income_message<R: Repo>(
                             repo.subscribe(subscription_key.clone()).await?;
                             client_lock
                                 .add_subscription(topic.clone(), client_subscription_key.clone());
-                            if let Some(value) = repo.get_by_key(&subscription_key).await? {
+                            let value = repo.get_by_key(&subscription_key).await?;
+                            let (value, subtopics) = if let (Some(value), true) =
+                                (value.as_ref(), topic.is_multi_topic())
+                            {
+                                let subtopics_vec = parse_multitopic_value::<Vec<_>>(value)?;
+                                let subtopics = HashSet::from_iter(subtopics_vec.iter().cloned());
+                                let value =
+                                    prepare_multitopic_response(repo, subtopics_vec, Vec::new())
+                                        .await?;
+                                (Some(value), Some(subtopics))
+                            } else {
+                                (value, None)
+                            };
+                            if let Some(value) = value {
                                 client_lock.send_subscribed(&topic, value)?;
                             } else {
                                 client_lock.add_new_subscription(topic.clone());
                             }
-                            topics_lock.add_subscription(topic, *client_id);
+                            topics_lock.add_subscription(topic.clone(), *client_id);
+                            if let Some(subtopics) = subtopics {
+                                let update =
+                                    topics_lock.update_multitopic_info(topic.clone(), subtopics);
+                                topics_lock.update_indirect_subscriptions(topic, update, client_id);
+                            }
                         }
                     }
                     IncomeMessage::Unsubscribe {
@@ -232,11 +253,11 @@ async fn handle_income_message<R: Repo>(
 
                         if client_lock.contains_subscription(&topic) {
                             client_lock.remove_subscription(&topic);
-                            topics
-                                .get(&topic)
-                                .write()
-                                .await
-                                .remove_subscription(&topic, client_id);
+                            let mut topics_lock = topics.get(&topic).write().await;
+                            if topic.is_multi_topic() {
+                                topics_lock.remove_indirect_subscriptions(&topic, client_id);
+                            }
+                            topics_lock.remove_subscription(&topic, client_id);
                         }
 
                         client_lock.send_unsubscribed(client_subscription_key)?;
@@ -306,11 +327,11 @@ async fn on_disconnect(
                 stream::iter(client_lock.subscriptions_iter())
                     .map(|(topic, _)| (topic, &topics))
                     .for_each_concurrent(20, |(topic, topics)| async move {
-                        topics
-                            .get(&topic)
-                            .write()
-                            .await
-                            .remove_subscription(topic, &client_id);
+                        let mut topics_lock = topics.get(&topic).write().await;
+                        if topic.is_multi_topic() {
+                            topics_lock.remove_indirect_subscriptions(topic, &client_id);
+                        }
+                        topics_lock.remove_subscription(topic, &client_id);
                     })
                     .await;
 
@@ -337,7 +358,7 @@ async fn on_disconnect(
     }
 
     debug!(
-        "client#{} subscribtions cleared; remove him from clients",
+        "client#{} subscriptions cleared; remove him from clients",
         client_id
     );
 
@@ -352,45 +373,93 @@ async fn on_disconnect(
     let _ = socket.close().await;
 }
 
-pub async fn updates_handler(
+pub async fn updates_handler<R: Repo>(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Sharded<Topics>>,
+    repo: Arc<R>,
 ) {
     info!("websocket updates handler started");
 
     while let Some((topic, value)) = updates_receiver.recv().await {
         debug!("handled new update {:?}", topic);
-        let maybe_client_ids = topics
-            .get(&topic)
-            .read()
-            .await
-            .get_client_ids(&topic)
-            .cloned();
+        let topics_shard = topics.get(&topic);
+        let maybe_client_ids = topics_shard.read().await.get_client_ids(&topic);
+
+        let multi_update_value = if topic.is_multi_topic() {
+            let subtopics = match parse_multitopic_value(&value) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "multitopic {} has unrecognized value {}; error = {}",
+                        String::from(topic),
+                        value,
+                        e
+                    );
+                    continue;
+                }
+            };
+            let multitopic_update = topics_shard
+                .write()
+                .await
+                .update_multitopic_info(topic.clone(), subtopics);
+            if maybe_client_ids.is_some() {
+                match prepare_multitopic_response(
+                    &repo,
+                    multitopic_update.added_subtopics,
+                    multitopic_update.removed_subtopics,
+                )
+                .await
+                {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        error!(
+                            "failed to build update for multitopic {}; error = {}",
+                            String::from(topic),
+                            e
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         if let Some(client_ids) = maybe_client_ids {
             let broadcasting_start = Instant::now();
 
             // NB: 1st implementation iterate over client_ids -> find shard for client_id -> acquire shard read lock -> get client lock -> send update
             // but it sometimes leads to deadlock|livelock|star (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
-            // 2st implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
-            for shard in clients.into_iter() {
+            // 2nd implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
+            for clients_shard in clients.into_iter() {
                 for (client_id, client) in
-                    shard.read().await.iter().filter_map(|(client_id, client)| {
-                        if client_ids.contains(&client_id) {
-                            Some((client_id, client))
-                        } else {
-                            None
-                        }
-                    })
+                    clients_shard
+                        .read()
+                        .await
+                        .iter()
+                        .filter_map(|(client_id, client)| {
+                            if client_ids.contains(&client_id) {
+                                Some((client_id, client))
+                            } else {
+                                None
+                            }
+                        })
                 {
                     debug!("send update to the client#{:?} {:?}", client_id, topic);
+                    let value = if let Some(multi_update_value) = multi_update_value.as_ref() {
+                        multi_update_value.clone()
+                    } else {
+                        value.clone()
+                    };
                     loop {
                         match client.try_lock() {
                             Ok(mut client_lock) => {
                                 client_lock
-                                    .send_update(&topic, value.to_owned())
-                                    .expect("error occured while sending message");
+                                    .send_update(&topic, value)
+                                    .expect("error occurred while sending message");
                                 break;
                             }
                             Err(_) => {
@@ -420,4 +489,71 @@ pub async fn updates_handler(
             debug!("there are not any clients to send update");
         }
     }
+}
+
+fn parse_multitopic_value<T>(topics_json: &str) -> Result<T, Error>
+where
+    T: FromIterator<Topic>,
+{
+    let topics = serde_json::from_str::<Vec<&str>>(topics_json)?;
+    topics
+        .into_iter()
+        .map(|topic_url| {
+            Topic::try_from(topic_url).map_err(|_| Error::InvalidTopic(topic_url.to_owned()))
+        })
+        .collect()
+}
+
+async fn prepare_multitopic_response<R, T1, T2>(
+    repo: &Arc<R>,
+    updated_topics: T1,
+    removed_topics: T2,
+) -> Result<String, Error>
+where
+    R: Repo,
+    T1: IntoIterator<Item = Topic>,
+    T2: IntoIterator<Item = Topic>,
+    T1::IntoIter: Clone,
+{
+    let updated_topics = updated_topics.into_iter();
+    let removed_topics = removed_topics.into_iter();
+
+    let topics: Vec<String> = updated_topics
+        .clone()
+        .map(|topic| String::from(topic))
+        .collect();
+    let topics_len = topics.len();
+    let values = repo.get_by_keys(topics).await?;
+    debug_assert_eq!(topics_len, values.len()); // Redis' MGET guarantees this
+    let values = values
+        .into_iter()
+        .map(|maybe_topic| maybe_topic.unwrap_or_default());
+    let updated = updated_topics
+        .zip(values)
+        .map(|(topic, value)| match topic {
+            Topic::State(State::Single(StateSingle { address, key })) => MultiValueResponseItem {
+                address,
+                key,
+                value,
+            },
+            _ => panic!("internal error: updated_topics contains unexpected topics"),
+        });
+    let removed = removed_topics.map(|topic| match topic {
+        Topic::State(State::Single(StateSingle { address, key })) => MultiValueResponseItem {
+            address,
+            key,
+            value: "".to_string(),
+        },
+        _ => panic!("internal error: updated_topics contains unexpected topics"),
+    });
+    let res_list = updated.chain(removed).collect::<Vec<_>>();
+    let response_json_str = serde_json::to_string(&res_list)?;
+    Ok(response_json_str)
+}
+
+#[derive(Debug, Serialize)]
+struct MultiValueResponseItem {
+    address: String,
+    key: String,
+    value: String,
 }

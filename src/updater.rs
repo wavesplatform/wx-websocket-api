@@ -24,7 +24,7 @@ pub fn run(
                         let value = msg.get_payload::<String>()?;
                         updates_sender
                             .send((topic, value))
-                            .expect("error occured while sending resource update");
+                            .expect("error occurred while sending resource update");
                     }
                 }
                 Err(error) => {

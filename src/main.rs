@@ -57,6 +57,7 @@ async fn tokio_main() -> Result<(), Error> {
             updates_receiver,
             clients,
             topics,
+            repo.clone(),
         ))
     };
 
@@ -82,14 +83,13 @@ async fn tokio_main() -> Result<(), Error> {
         server_options,
         shutdown_signal_tx,
     );
-    let server_handler = tokio::spawn(server);
+    let server_handle = tokio::spawn(server);
 
     let mut sigterm_stream =
-        signal(SignalKind::terminate()).expect("error occured while creating sigterm stream");
+        signal(SignalKind::terminate()).expect("error occurred while creating sigterm stream");
 
     tokio::select! {
-        _ =
-        tokio::signal::ctrl_c() => {
+        _ = tokio::signal::ctrl_c() => {
             debug!("got sigint");
         },
         _ = sigterm_stream.recv() => {
@@ -110,6 +110,6 @@ async fn tokio_main() -> Result<(), Error> {
     shutdown_signal_rx.close();
 
     let _ = server_stop_tx.send(());
-    server_handler.await?;
+    server_handle.await?;
     Ok(())
 }

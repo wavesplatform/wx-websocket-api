@@ -204,7 +204,6 @@ impl Client {
             self.message_counter += 1;
             self.sender.send(Message::from(message))?;
         }
-        
         Ok(())
     }
 }
@@ -217,16 +216,21 @@ pub struct ClientIdsByTopics(HashMap<Topic, KeyInfo>);
 
 #[derive(Debug)]
 pub struct KeyInfo {
+    /// List of clients directly subscribed to this topic
     clients: HashSet<ClientId>,
+    /// List of clients receiving updates to this topic indirectly from multi-topics
+    indirect_clients: HashMap<ClientId, HashSet<Topic>>,
+    /// List of subtopics for this multi-topic (empty otherwise)
+    subtopics: HashSet<Topic>,
     last_refresh_time: Instant,
 }
 
 impl KeyInfo {
-    pub fn new(client_id: ClientId) -> Self {
-        let mut clients = HashSet::new();
-        clients.insert(client_id);
+    pub fn new() -> Self {
         Self {
-            clients,
+            clients: HashSet::new(),
+            indirect_clients: HashMap::new(),
+            subtopics: HashSet::new(),
             last_refresh_time: Instant::now(),
         }
     }
@@ -242,27 +246,119 @@ impl KeyInfo {
     }
 }
 
+pub struct MultitopicUpdate {
+    pub added_subtopics: Vec<Topic>,
+    pub removed_subtopics: Vec<Topic>,
+}
+
 impl ClientIdsByTopics {
     pub fn add_subscription(&mut self, topic: Topic, client_id: ClientId) {
-        if let Some(clients) = self.0.get_mut(&topic) {
-            clients.clients.insert(client_id);
-        } else {
-            let v = KeyInfo::new(client_id);
-            self.0.insert(topic, v);
-        }
+        self.0
+            .entry(topic)
+            .or_insert_with(KeyInfo::new)
+            .clients
+            .insert(client_id);
     }
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
-        if let Some(key_info) = self.0.get_mut(&topic) {
+        if let Some(key_info) = self.0.get_mut(topic) {
             key_info.clients.remove(client_id);
-            if key_info.clients.is_empty() {
-                self.0.remove(&topic);
+            if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                self.0.remove(topic);
             }
-        };
+        }
     }
 
-    pub fn get_client_ids(&self, topic: &Topic) -> Option<&HashSet<ClientId>> {
-        self.0.get(topic).map(|key_info| &key_info.clients)
+    pub fn update_multitopic_info(
+        &mut self,
+        multitopic: Topic,
+        subtopics: HashSet<Topic>,
+    ) -> MultitopicUpdate {
+        let key_info = self.0.entry(multitopic).or_insert_with(KeyInfo::new);
+
+        let added_subtopics = subtopics
+            .difference(&key_info.subtopics)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let removed_subtopics = key_info
+            .subtopics
+            .difference(&subtopics)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if key_info.subtopics != subtopics {
+            key_info.subtopics = subtopics;
+        }
+
+        MultitopicUpdate {
+            added_subtopics,
+            removed_subtopics,
+        }
+    }
+
+    pub fn update_indirect_subscriptions(
+        &mut self,
+        multitopic: Topic,
+        update: MultitopicUpdate,
+        client_id: &ClientId,
+    ) {
+        for topic in update.added_subtopics {
+            self.0
+                .entry(topic)
+                .or_insert_with(KeyInfo::new)
+                .indirect_clients
+                .entry(client_id.clone())
+                .or_insert_with(HashSet::new)
+                .insert(multitopic.clone());
+        }
+
+        for topic in update.removed_subtopics {
+            if let Some(key_info) = self.0.get_mut(&topic) {
+                if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
+                    multitopics.remove(&multitopic);
+                    if multitopics.is_empty() {
+                        key_info.indirect_clients.remove(client_id);
+                    }
+                }
+                if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                    self.0.remove(&topic);
+                }
+            }
+        }
+    }
+
+    pub fn remove_indirect_subscriptions(&mut self, multitopic: &Topic, client_id: &ClientId) {
+        if let Some(multitopic_key_info) = self.0.get(multitopic) {
+            let subtopics = multitopic_key_info.subtopics.clone();
+            for topic in subtopics.iter() {
+                if let Some(key_info) = self.0.get_mut(topic) {
+                    if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
+                        multitopics.remove(multitopic);
+                        if multitopics.is_empty() {
+                            key_info.indirect_clients.remove(client_id);
+                        }
+                    }
+                    if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                        self.0.remove(topic);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_client_ids(&self, topic: &Topic) -> Option<HashSet<ClientId>> {
+        self.0.get(topic).map(|key_info| {
+            if key_info.indirect_clients.is_empty() {
+                key_info.clients.clone()
+            } else {
+                let total_clients = key_info.clients.len() + key_info.indirect_clients.len();
+                let mut res = HashSet::with_capacity(total_clients);
+                res.extend(key_info.clients.iter());
+                res.extend(key_info.indirect_clients.keys());
+                res
+            }
+        })
     }
 
     pub fn topics_iter(&self) -> std::collections::hash_map::Iter<'_, Topic, KeyInfo> {
