@@ -525,6 +525,9 @@ where
     let topics_len = topics.len();
     let values = repo.get_by_keys(topics).await?;
     debug_assert_eq!(topics_len, values.len()); // Redis' MGET guarantees this
+    let values = values
+        .into_iter()
+        .map(|maybe_topic| maybe_topic.unwrap_or_default());
     let updated = updated_topics
         .zip(values)
         .map(|(topic, value)| match topic {

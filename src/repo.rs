@@ -24,7 +24,7 @@ pub trait Repo: Send + Sync {
 
     async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error>;
 
-    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<String>, Error>;
+    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<Option<String>>, Error>;
 
     async fn refresh(&self, topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error>;
 }
@@ -66,7 +66,7 @@ impl Repo for RepoImpl {
         Ok(con.get(key).await?)
     }
 
-    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<String>, Error> {
+    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<Option<String>>, Error> {
         let mut con = self.pool.get().await?;
         Ok(con.get(keys).await?)
     }
