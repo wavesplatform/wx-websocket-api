@@ -1529,9 +1529,10 @@ dependencies = [
 
 [[package]]
 name = "wavesexchange_topic"
-version = "0.2.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_topic/0.2.0#dd4ed25a181134551e0c219b0aa83e2d77c83e64"
+version = "0.2.1"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_topic/0.2.1#a490af400cdd26a8e5451262e71b494578527302"
 dependencies = [
+ "percent-encoding",
  "serde",
  "serde_qs",
  "thiserror",
