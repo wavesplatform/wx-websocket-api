@@ -39,7 +39,7 @@ async fn tokio_main() -> Result<(), Error> {
     );
 
     let clients = Arc::new(shard::Sharded::<client::Clients>::new(20));
-    let topics = Arc::new(shard::Sharded::<client::Topics>::new(20));
+    let topics = Arc::new(client::Topics::default());
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
     let pool = bb8::Pool::builder().build(manager).await?;

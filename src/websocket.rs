@@ -37,7 +37,7 @@ pub struct HandleConnectionOptions {
 pub async fn handle_connection<R: Repo>(
     mut socket: ws::WebSocket,
     clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
+    topics: Arc<Topics>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     request_id: Option<String>,
@@ -91,7 +91,7 @@ async fn run<R: Repo>(
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
     request_id: Option<String>,
-    topics: &Arc<Sharded<Topics>>,
+    topics: &Arc<Topics>,
     repo: Arc<R>,
     options: HandleConnectionOptions,
     mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
@@ -193,7 +193,7 @@ async fn handle_income_message<R: Repo>(
     repo: &Arc<R>,
     client: &Arc<Mutex<Client>>,
     client_id: &ClientId,
-    topics: &Arc<Sharded<Topics>>,
+    topics: &Arc<Topics>,
     raw_msg: &ws::Message,
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(raw_msg)?;
@@ -216,10 +216,13 @@ async fn handle_income_message<R: Repo>(
                                 "You are already subscribed for the specified topic".to_string();
                             client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
                         } else {
-                            let mut topics_lock = topics.get(&topic).write().await;
+                            let mut topics_lock = topics.write().await;
                             repo.subscribe(subscription_key.clone()).await?;
-                            client_lock
-                                .add_subscription(topic.clone(), client_subscription_key.clone());
+                            {
+                                let topic = topic.clone();
+                                let key = client_subscription_key.clone();
+                                client_lock.add_direct_subscription(topic, key);
+                            }
                             let value = repo.get_by_key(&subscription_key).await?;
                             let (value, subtopics) = if let (Some(value), true) =
                                 (value.as_ref(), topic.is_multi_topic())
@@ -236,12 +239,18 @@ async fn handle_income_message<R: Repo>(
                             if let Some(value) = value {
                                 client_lock.send_subscribed(&topic, value)?;
                             } else {
-                                client_lock.add_new_subscription(topic.clone());
+                                client_lock.mark_subscription_as_new(topic.clone());
                             }
                             topics_lock.add_subscription(topic.clone(), *client_id);
                             if let Some(subtopics) = subtopics {
                                 let update =
                                     topics_lock.update_multitopic_info(topic.clone(), subtopics);
+                                for subtopic in update.added_subtopics.iter().cloned() {
+                                    client_lock.add_indirect_subscription(subtopic, topic.clone());
+                                }
+                                for subtopic in update.removed_subtopics.iter() {
+                                    client_lock.remove_indirect_subscription(subtopic, &topic);
+                                }
                                 topics_lock.update_indirect_subscriptions(topic, update, client_id);
                             }
                         }
@@ -252,10 +261,14 @@ async fn handle_income_message<R: Repo>(
                         let topic = Topic::try_from(&client_subscription_key)?;
 
                         if client_lock.contains_subscription(&topic) {
-                            client_lock.remove_subscription(&topic);
-                            let mut topics_lock = topics.get(&topic).write().await;
+                            client_lock.remove_direct_subscription(&topic);
+                            let mut topics_lock = topics.write().await;
                             if topic.is_multi_topic() {
-                                topics_lock.remove_indirect_subscriptions(&topic, client_id);
+                                let removed =
+                                    topics_lock.remove_indirect_subscriptions(&topic, client_id);
+                                for subtopic in removed {
+                                    client_lock.remove_indirect_subscription(&subtopic, &topic);
+                                }
                             }
                             topics_lock.remove_subscription(&topic, client_id);
                         }
@@ -318,18 +331,20 @@ async fn on_disconnect(
     client: Arc<Mutex<Client>>,
     client_id: ClientId,
     clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
+    topics: Arc<Topics>,
 ) -> () {
     loop {
         match client.try_lock() {
             Ok(client_lock) => {
                 // remove topics from Topics
-                stream::iter(client_lock.subscriptions_iter())
-                    .map(|(topic, _)| (topic, &topics))
+                stream::iter(client_lock.subscription_topics_iter())
+                    .map(|topic| (topic, &topics))
                     .for_each_concurrent(20, |(topic, topics)| async move {
-                        let mut topics_lock = topics.get(&topic).write().await;
+                        let mut topics_lock = topics.write().await;
                         if topic.is_multi_topic() {
-                            topics_lock.remove_indirect_subscriptions(topic, &client_id);
+                            let _ = topics_lock.remove_indirect_subscriptions(topic, &client_id);
+                            // Since we are dropping the disconnected client anyway,
+                            // don't bother removing individual indirect subscriptions
                         }
                         topics_lock.remove_subscription(topic, &client_id);
                     })
@@ -376,17 +391,16 @@ async fn on_disconnect(
 pub async fn updates_handler<R: Repo>(
     mut updates_receiver: tokio::sync::mpsc::UnboundedReceiver<(Topic, String)>,
     clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
+    topics: Arc<Topics>,
     repo: Arc<R>,
 ) {
     info!("websocket updates handler started");
 
     while let Some((topic, value)) = updates_receiver.recv().await {
         debug!("handled new update {:?}", topic);
-        let topics_shard = topics.get(&topic);
-        let maybe_client_ids = topics_shard.read().await.get_client_ids(&topic);
+        let maybe_client_ids = topics.read().await.get_client_ids(&topic);
 
-        let multi_update_value = if topic.is_multi_topic() {
+        let multiupdate = if topic.is_multi_topic() {
             let subtopics = match parse_multitopic_value(&value) {
                 Ok(v) => v,
                 Err(e) => {
@@ -399,19 +413,27 @@ pub async fn updates_handler<R: Repo>(
                     continue;
                 }
             };
-            let multitopic_update = topics_shard
-                .write()
-                .await
-                .update_multitopic_info(topic.clone(), subtopics);
-            if maybe_client_ids.is_some() {
-                match prepare_multitopic_response(
-                    &repo,
-                    multitopic_update.added_subtopics,
-                    multitopic_update.removed_subtopics,
-                )
-                .await
-                {
-                    Ok(v) => Some(v),
+            let mut topics_lock = topics.write().await;
+            let multitopic_update = topics_lock.update_multitopic_info(topic.clone(), subtopics);
+            if let Some(ref client_ids) = maybe_client_ids {
+                for client_id in client_ids {
+                    topics_lock.update_indirect_subscriptions(
+                        topic.clone(),
+                        multitopic_update.clone(),
+                        client_id,
+                    );
+                }
+                let multitopic_response = {
+                    let update = multitopic_update.clone();
+                    prepare_multitopic_response(
+                        &repo,
+                        update.added_subtopics,
+                        update.removed_subtopics,
+                    )
+                    .await
+                };
+                match multitopic_response {
+                    Ok(v) => Some((multitopic_update, v)),
                     Err(e) => {
                         error!(
                             "failed to build update for multitopic {}; error = {}",
@@ -449,14 +471,27 @@ pub async fn updates_handler<R: Repo>(
                         })
                 {
                     debug!("send update to the client#{:?} {:?}", client_id, topic);
-                    let value = if let Some(multi_update_value) = multi_update_value.as_ref() {
-                        multi_update_value.clone()
-                    } else {
-                        value.clone()
-                    };
+                    let (value, multitopic_update) =
+                        if let Some((multitopic_update, multi_update_value)) = multiupdate.as_ref()
+                        {
+                            (multi_update_value.clone(), Some(multitopic_update))
+                        } else {
+                            (value.clone(), None)
+                        };
                     loop {
                         match client.try_lock() {
                             Ok(mut client_lock) => {
+                                if let Some(multitopic_update) = multitopic_update {
+                                    for subtopic in
+                                        multitopic_update.added_subtopics.iter().cloned()
+                                    {
+                                        client_lock
+                                            .add_indirect_subscription(subtopic, topic.clone());
+                                    }
+                                    for subtopic in multitopic_update.removed_subtopics.iter() {
+                                        client_lock.remove_indirect_subscription(subtopic, &topic);
+                                    }
+                                }
                                 client_lock
                                     .send_update(&topic, value)
                                     .expect("error occurred while sending message");

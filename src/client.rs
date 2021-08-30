@@ -12,18 +12,26 @@ use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClientSubscriptionKey(pub String);
 
 #[derive(Debug)]
 pub struct Client {
     sender: tokio::sync::mpsc::UnboundedSender<Message>,
-    subscriptions: HashMap<Topic, ClientSubscriptionKey>,
+    subscriptions: HashMap<Topic, ClientSubscriptionData>,
     message_counter: i64,
     pings: Vec<i64>,
     request_id: Option<String>,
-    new_subscriptions: HashSet<Topic>,
-    leasing_balance_last_values: HashMap<Topic, LeasingBalance>,
+}
+
+#[derive(Default, Debug)]
+struct ClientSubscriptionData {
+    subscription_key: ClientSubscriptionKey,
+    indirect_keys: HashSet<Topic>,
+    is_new: bool,
+    is_direct: bool,
+    is_indirect: bool,
+    leasing_balance_last_value: Option<LeasingBalance>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -60,10 +68,8 @@ impl Client {
             sender,
             request_id,
             subscriptions: HashMap::new(),
-            new_subscriptions: HashSet::new(),
             message_counter: 1,
             pings: vec![],
-            leasing_balance_last_values: HashMap::new(),
         }
     }
 
@@ -75,22 +81,49 @@ impl Client {
         self.subscriptions.contains_key(topic)
     }
 
-    pub fn add_subscription(
+    pub fn add_direct_subscription(
         &mut self,
         topic: Topic,
         client_subscription_key: ClientSubscriptionKey,
     ) {
-        self.subscriptions.insert(topic, client_subscription_key);
+        let subscription_data = self.subscriptions.entry(topic).or_default();
+        subscription_data.subscription_key = client_subscription_key;
+        subscription_data.is_direct = true;
     }
 
-    pub fn add_new_subscription(&mut self, topic: Topic) {
-        self.new_subscriptions.insert(topic);
+    pub fn add_indirect_subscription(&mut self, topic: Topic, parent_multitopic: Topic) {
+        let subscription_data = self.subscriptions.entry(topic).or_default();
+        subscription_data.indirect_keys.insert(parent_multitopic);
+        subscription_data.is_indirect = true;
     }
 
-    pub fn remove_subscription(&mut self, topic: &Topic) {
-        self.subscriptions.remove(topic);
-        self.new_subscriptions.remove(topic);
-        self.leasing_balance_last_values.remove(topic);
+    pub fn mark_subscription_as_new(&mut self, topic: Topic) {
+        self.subscriptions
+            .entry(topic)
+            .and_modify(|subscription_data| subscription_data.is_new = true);
+    }
+
+    pub fn remove_direct_subscription(&mut self, topic: &Topic) {
+        if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
+            subscription_data.is_direct = false;
+            let still_subscribed = subscription_data.is_direct | subscription_data.is_indirect;
+            if !still_subscribed {
+                self.subscriptions.remove(topic);
+            }
+        }
+    }
+
+    pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
+        if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
+            subscription_data.indirect_keys.remove(parent_multitopic);
+            if subscription_data.indirect_keys.is_empty() {
+                subscription_data.is_indirect = false;
+            }
+            let still_subscribed = subscription_data.is_direct | subscription_data.is_indirect;
+            if !still_subscribed {
+                self.subscriptions.remove(topic);
+            }
+        }
     }
 
     pub fn handle_pong(&mut self, message_number: i64) -> Result<(), Error> {
@@ -121,13 +154,13 @@ impl Client {
     }
 
     pub fn send_subscribed(&mut self, topic: &Topic, value: String) -> Result<(), Error> {
-        if let Some(subscription_key) = self.subscriptions.get(topic) {
+        if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             if let Ok(Some(lb)) = serde_json::from_str(&value) {
-                self.leasing_balance_last_values.insert(topic.clone(), lb);
+                subscription_data.leasing_balance_last_value = lb;
             }
             let message = OutcomeMessage::Subscribed {
                 message_number: self.message_counter,
-                topic: subscription_key.clone(),
+                topic: subscription_data.subscription_key.clone(),
                 value,
             };
             self.send(message)?;
@@ -137,23 +170,24 @@ impl Client {
     }
 
     pub fn send_update(&mut self, topic: &Topic, mut value: String) -> Result<(), Error> {
-        if let Some(client_subscription_key) = self.subscriptions.get(topic) {
+        if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             if let Ok(Some(lb)) = serde_json::from_str(&value) {
-                if let Some(old_value) = self.leasing_balance_last_values.get(topic) {
+                if let Some(ref old_value) = subscription_data.leasing_balance_last_value {
                     value = leasing_balance_diff(old_value, &lb);
                 }
-                self.leasing_balance_last_values.insert(topic.clone(), lb);
+                subscription_data.leasing_balance_last_value = Some(lb);
             }
-            let message = if self.new_subscriptions.remove(topic) {
+            let message = if subscription_data.is_new {
+                subscription_data.is_new = false;
                 OutcomeMessage::Subscribed {
                     message_number: self.message_counter,
-                    topic: client_subscription_key.clone(),
+                    topic: subscription_data.subscription_key.clone(),
                     value,
                 }
             } else {
                 OutcomeMessage::Update {
                     message_number: self.message_counter,
-                    topic: client_subscription_key.clone(),
+                    topic: subscription_data.subscription_key.clone(),
                     value,
                 }
             };
@@ -193,10 +227,8 @@ impl Client {
         self.message_counter - 1
     }
 
-    pub fn subscriptions_iter(
-        &self,
-    ) -> std::collections::hash_map::Iter<'_, Topic, ClientSubscriptionKey> {
-        self.subscriptions.iter()
+    pub fn subscription_topics_iter(&self) -> impl Iterator<Item = &Topic> {
+        self.subscriptions.iter().map(|(topic, _)| topic)
     }
 
     fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
@@ -246,6 +278,7 @@ impl KeyInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct MultitopicUpdate {
     pub added_subtopics: Vec<Topic>,
     pub removed_subtopics: Vec<Topic>,
@@ -328,9 +361,17 @@ impl ClientIdsByTopics {
         }
     }
 
-    pub fn remove_indirect_subscriptions(&mut self, multitopic: &Topic, client_id: &ClientId) {
+    pub fn remove_indirect_subscriptions(
+        &mut self,
+        multitopic: &Topic,
+        client_id: &ClientId,
+    ) -> Vec<Topic> {
         if let Some(multitopic_key_info) = self.0.get(multitopic) {
-            let subtopics = multitopic_key_info.subtopics.clone();
+            let subtopics = multitopic_key_info
+                .subtopics
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
             for topic in subtopics.iter() {
                 if let Some(key_info) = self.0.get_mut(topic) {
                     if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
@@ -344,6 +385,9 @@ impl ClientIdsByTopics {
                     }
                 }
             }
+            subtopics
+        } else {
+            vec![]
         }
     }
 
