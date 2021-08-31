@@ -26,11 +26,20 @@ pub struct Client {
 
 #[derive(Default, Debug)]
 struct ClientSubscriptionData {
+    /// Subscription key for the topic as received from the client.
+    /// Can refer to either concrete topic or multitopic.
     subscription_key: ClientSubscriptionKey,
+    /// Set of multitopics that indirectly added this concrete topic
+    /// to the subscriptions.
     indirect_keys: HashSet<Topic>,
+    /// Intermediate state - awaiting of the initial values
+    /// so that we can send 'subscribed' message.
     is_new: bool,
+    /// This topic was directly subscribed to.
     is_direct: bool,
+    /// This topic was indirectly subscribed to by one or more multitopics.
     is_indirect: bool,
+    /// Last value of indirect balance (to allow computation of delta value).
     leasing_balance_last_value: Option<LeasingBalance>,
 }
 
@@ -106,7 +115,7 @@ impl Client {
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             subscription_data.is_direct = false;
-            let still_subscribed = subscription_data.is_direct | subscription_data.is_indirect;
+            let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
             if !still_subscribed {
                 self.subscriptions.remove(topic);
             }
@@ -119,7 +128,7 @@ impl Client {
             if subscription_data.indirect_keys.is_empty() {
                 subscription_data.is_indirect = false;
             }
-            let still_subscribed = subscription_data.is_direct | subscription_data.is_indirect;
+            let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
             if !still_subscribed {
                 self.subscriptions.remove(topic);
             }
