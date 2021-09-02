@@ -1,5 +1,4 @@
 use futures::{stream, SinkExt, StreamExt};
-use serde::Serialize;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
@@ -577,29 +576,14 @@ where
     let updated = updated_topics
         .zip(values)
         .map(|(topic, value)| match topic {
-            Topic::State(State::Single(StateSingle { address, key })) => MultiValueResponseItem {
-                address,
-                key,
-                value,
-            },
+            Topic::State(State::Single(StateSingle { .. })) => value,
             _ => panic!("internal error: updated_topics contains unexpected topics"),
         });
     let removed = removed_topics.map(|topic| match topic {
-        Topic::State(State::Single(StateSingle { address, key })) => MultiValueResponseItem {
-            address,
-            key,
-            value: "".to_string(),
-        },
+        Topic::State(State::Single(StateSingle { .. })) => "".to_string(),
         _ => panic!("internal error: updated_topics contains unexpected topics"),
     });
     let res_list = updated.chain(removed).collect::<Vec<_>>();
     let response_json_str = serde_json::to_string(&res_list)?;
     Ok(response_json_str)
-}
-
-#[derive(Debug, Serialize)]
-struct MultiValueResponseItem {
-    address: String,
-    key: String,
-    value: String,
 }
