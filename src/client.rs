@@ -17,11 +17,16 @@ pub struct ClientSubscriptionKey(pub String);
 
 #[derive(Debug)]
 pub struct Client {
-    sender: tokio::sync::mpsc::UnboundedSender<Message>,
+    sender: ClientSender,
     subscriptions: HashMap<Topic, ClientSubscriptionData>,
+    request_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct ClientSender {
+    sender: tokio::sync::mpsc::UnboundedSender<Message>,
     message_counter: i64,
     pings: Vec<i64>,
-    request_id: Option<String>,
 }
 
 #[derive(Default, Debug)]
@@ -29,9 +34,9 @@ struct ClientSubscriptionData {
     /// Subscription key for the topic as received from the client.
     /// Can refer to either concrete topic or multitopic.
     subscription_key: ClientSubscriptionKey,
-    /// Set of multitopics that indirectly added this concrete topic
-    /// to the subscriptions.
-    indirect_keys: HashSet<Topic>,
+    /// Multitopics that indirectly added this concrete topic
+    /// to the client subscriptions.
+    indirect_subscription_sources: HashMap<Topic, IndirectSubscriptionData>,
     /// Intermediate state - awaiting of the initial values
     /// so that we can send 'subscribed' message.
     is_new: bool,
@@ -41,6 +46,12 @@ struct ClientSubscriptionData {
     is_indirect: bool,
     /// Last value of indirect balance (to allow computation of delta value).
     leasing_balance_last_value: Option<LeasingBalance>,
+}
+
+#[derive(Default, Debug)]
+struct IndirectSubscriptionData {
+    /// Subscription key for the parent multitopic as received from the client.
+    subscription_key: ClientSubscriptionKey,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -74,11 +85,13 @@ impl Client {
         request_id: Option<String>,
     ) -> Self {
         Client {
-            sender,
+            sender: ClientSender {
+                sender,
+                message_counter: 1,
+                pings: vec![],
+            },
             request_id,
             subscriptions: HashMap::new(),
-            message_counter: 1,
-            pings: vec![],
         }
     }
 
@@ -100,9 +113,19 @@ impl Client {
         subscription_data.is_direct = true;
     }
 
-    pub fn add_indirect_subscription(&mut self, topic: Topic, parent_multitopic: Topic) {
+    pub fn add_indirect_subscription(
+        &mut self,
+        topic: Topic,
+        parent_multitopic: Topic,
+        client_subscription_key: ClientSubscriptionKey,
+    ) {
         let subscription_data = self.subscriptions.entry(topic).or_default();
-        subscription_data.indirect_keys.insert(parent_multitopic);
+        subscription_data.indirect_subscription_sources.insert(
+            parent_multitopic,
+            IndirectSubscriptionData {
+                subscription_key: client_subscription_key,
+            },
+        );
         subscription_data.is_indirect = true;
     }
 
@@ -124,8 +147,10 @@ impl Client {
 
     pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
-            subscription_data.indirect_keys.remove(parent_multitopic);
-            if subscription_data.indirect_keys.is_empty() {
+            subscription_data
+                .indirect_subscription_sources
+                .remove(parent_multitopic);
+            if subscription_data.indirect_subscription_sources.is_empty() {
                 subscription_data.is_indirect = false;
             }
             let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
@@ -136,13 +161,8 @@ impl Client {
     }
 
     pub fn handle_pong(&mut self, message_number: i64) -> Result<(), Error> {
-        if self.pings.contains(&message_number) {
-            self.pings = self
-                .pings
-                .iter()
-                .filter(|&&x| x > message_number)
-                .cloned()
-                .collect();
+        let valid_pong = self.sender.handle_pong(message_number).is_ok();
+        if valid_pong {
             Ok(())
         } else {
             // client sent invalid pong message
@@ -152,14 +172,11 @@ impl Client {
     }
 
     pub fn pings_len(&self) -> usize {
-        self.pings.len()
+        self.sender.pings.len()
     }
 
     pub fn send_ping(&mut self) -> Result<(), Error> {
-        self.pings.push(self.message_counter);
-        let message_number = self.message_counter;
-        let message = OutcomeMessage::Ping { message_number };
-        self.send(message)
+        self.sender.send_ping()
     }
 
     pub fn send_subscribed(&mut self, topic: &Topic, value: String) -> Result<(), Error> {
@@ -167,13 +184,8 @@ impl Client {
             if let Ok(Some(lb)) = serde_json::from_str(&value) {
                 subscription_data.leasing_balance_last_value = lb;
             }
-            let message = OutcomeMessage::Subscribed {
-                message_number: self.message_counter,
-                topic: subscription_data.subscription_key.clone(),
-                value,
-            };
-            self.send(message)?;
-            MESSAGES.inc();
+            let subscription_key = subscription_data.subscription_key.clone();
+            self.sender.send_subscribed(subscription_key, value)?;
         }
         Ok(())
     }
@@ -186,22 +198,25 @@ impl Client {
                 }
                 subscription_data.leasing_balance_last_value = Some(lb);
             }
-            let message = if subscription_data.is_new {
-                subscription_data.is_new = false;
-                OutcomeMessage::Subscribed {
-                    message_number: self.message_counter,
-                    topic: subscription_data.subscription_key.clone(),
-                    value,
+
+            if subscription_data.is_direct {
+                let subscription_key = subscription_data.subscription_key.clone();
+                let value = value.clone();
+                if subscription_data.is_new {
+                    subscription_data.is_new = false;
+                    self.sender.send_subscribed(subscription_key, value)?;
+                } else {
+                    self.sender.send_update(subscription_key, value)?;
                 }
-            } else {
-                OutcomeMessage::Update {
-                    message_number: self.message_counter,
-                    topic: subscription_data.subscription_key.clone(),
-                    value,
+            }
+
+            if subscription_data.is_indirect {
+                for sub in subscription_data.indirect_subscription_sources.values() {
+                    let subscription_key = sub.subscription_key.clone();
+                    let value = value.clone();
+                    self.sender.send_update(subscription_key, value)?;
                 }
-            };
-            self.send(message)?;
-            MESSAGES.inc();
+            }
         }
         Ok(())
     }
@@ -210,6 +225,80 @@ impl Client {
         &mut self,
         subscription_key: ClientSubscriptionKey,
     ) -> Result<(), Error> {
+        self.sender.send_unsubscribed(subscription_key)
+    }
+
+    pub fn send_error(
+        &mut self,
+        code: u16,
+        message: String,
+        details: Option<HashMap<String, String>>,
+    ) -> Result<(), Error> {
+        self.sender.send_error(code, message, details)
+    }
+
+    pub fn messages_count(&self) -> i64 {
+        self.sender.message_counter - 1
+    }
+
+    pub fn subscription_topics_iter(&self) -> impl Iterator<Item = &Topic> {
+        self.subscriptions.iter().map(|(topic, _)| topic)
+    }
+}
+
+impl ClientSender {
+    fn handle_pong(&mut self, message_number: i64) -> Result<(), ()> {
+        if self.pings.contains(&message_number) {
+            self.pings = self
+                .pings
+                .iter()
+                .filter(|&&x| x > message_number)
+                .cloned()
+                .collect();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn send_ping(&mut self) -> Result<(), Error> {
+        self.pings.push(self.message_counter);
+        let message_number = self.message_counter;
+        let message = OutcomeMessage::Ping { message_number };
+        self.send(message)
+    }
+
+    fn send_subscribed(
+        &mut self,
+        subscription_key: ClientSubscriptionKey,
+        value: String,
+    ) -> Result<(), Error> {
+        let message = OutcomeMessage::Subscribed {
+            message_number: self.message_counter,
+            topic: subscription_key,
+            value,
+        };
+        self.send(message)?;
+        MESSAGES.inc();
+        Ok(())
+    }
+
+    fn send_update(
+        &mut self,
+        subscription_key: ClientSubscriptionKey,
+        value: String,
+    ) -> Result<(), Error> {
+        let message = OutcomeMessage::Update {
+            message_number: self.message_counter,
+            topic: subscription_key,
+            value,
+        };
+        self.send(message)?;
+        MESSAGES.inc();
+        Ok(())
+    }
+
+    fn send_unsubscribed(&mut self, subscription_key: ClientSubscriptionKey) -> Result<(), Error> {
         let message = OutcomeMessage::Unsubscribed {
             message_number: self.message_counter,
             topic: subscription_key,
@@ -217,7 +306,7 @@ impl Client {
         self.send(message)
     }
 
-    pub fn send_error(
+    fn send_error(
         &mut self,
         code: u16,
         message: String,
@@ -230,14 +319,6 @@ impl Client {
             message_number: self.message_counter,
         };
         self.send(message)
-    }
-
-    pub fn messages_count(&self) -> i64 {
-        self.message_counter - 1
-    }
-
-    pub fn subscription_topics_iter(&self) -> impl Iterator<Item = &Topic> {
-        self.subscriptions.iter().map(|(topic, _)| topic)
     }
 
     fn send(&mut self, message: OutcomeMessage) -> Result<(), Error> {
@@ -258,7 +339,7 @@ pub struct ClientIdsByTopics(HashMap<Topic, KeyInfo>);
 #[derive(Debug)]
 pub struct KeyInfo {
     /// List of clients directly subscribed to this topic
-    clients: HashSet<ClientId>,
+    clients: HashMap<ClientId, ClientSubscriptionKey>,
     /// List of clients receiving updates to this topic indirectly from multi-topics
     indirect_clients: HashMap<ClientId, HashSet<Topic>>,
     /// List of subtopics for this multi-topic (empty otherwise)
@@ -269,7 +350,7 @@ pub struct KeyInfo {
 impl KeyInfo {
     pub fn new() -> Self {
         Self {
-            clients: HashSet::new(),
+            clients: HashMap::new(),
             indirect_clients: HashMap::new(),
             subtopics: HashSet::new(),
             last_refresh_time: Instant::now(),
@@ -294,12 +375,17 @@ pub struct MultitopicUpdate {
 }
 
 impl ClientIdsByTopics {
-    pub fn add_subscription(&mut self, topic: Topic, client_id: ClientId) {
+    pub fn add_subscription(
+        &mut self,
+        topic: Topic,
+        client_id: ClientId,
+        subscription_key: ClientSubscriptionKey,
+    ) {
         self.0
             .entry(topic)
             .or_insert_with(KeyInfo::new)
             .clients
-            .insert(client_id);
+            .insert(client_id, subscription_key);
     }
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
@@ -400,21 +486,32 @@ impl ClientIdsByTopics {
         }
     }
 
-    pub fn get_client_ids(&self, topic: &Topic) -> Option<HashSet<ClientId>> {
-        self.0.get(topic).map(|key_info| {
-            if key_info.indirect_clients.is_empty() {
-                key_info.clients.clone()
-            } else {
-                let total_clients = key_info.clients.len() + key_info.indirect_clients.len();
-                let mut res = HashSet::with_capacity(total_clients);
-                res.extend(key_info.clients.iter());
-                res.extend(key_info.indirect_clients.keys());
-                res
-            }
-        })
+    pub fn get_subscribed_clients(
+        &self,
+        topic: &Topic,
+    ) -> HashMap<ClientId, Option<ClientSubscriptionKey>> {
+        self.0
+            .get(topic)
+            .map(|key_info| {
+                let direct_clients =
+                    key_info
+                        .clients
+                        .iter()
+                        .map(|(client_id, subscription_key)| {
+                            (client_id.clone(), Some(subscription_key.clone()))
+                        });
+
+                let indirect_clients = key_info
+                    .indirect_clients
+                    .keys()
+                    .map(|client_id| (client_id.clone(), None));
+
+                direct_clients.chain(indirect_clients).collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub fn topics_iter(&self) -> std::collections::hash_map::Iter<'_, Topic, KeyInfo> {
+    pub fn topics_iter(&self) -> impl Iterator<Item = (&Topic, &KeyInfo)> {
         self.0.iter()
     }
 

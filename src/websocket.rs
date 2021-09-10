@@ -241,12 +241,18 @@ async fn handle_income_message<R: Repo>(
                             } else {
                                 client_lock.mark_subscription_as_new(topic.clone());
                             }
-                            topics_lock.add_subscription(topic.clone(), *client_id);
+                            let key = client_subscription_key.clone();
+                            topics_lock.add_subscription(topic.clone(), *client_id, key);
                             if let Some(subtopics) = subtopics {
                                 let update =
                                     topics_lock.update_multitopic_info(topic.clone(), subtopics);
                                 for subtopic in update.added_subtopics.iter().cloned() {
-                                    client_lock.add_indirect_subscription(subtopic, topic.clone());
+                                    let key = client_subscription_key.clone();
+                                    client_lock.add_indirect_subscription(
+                                        subtopic,
+                                        topic.clone(),
+                                        key,
+                                    );
                                 }
                                 for subtopic in update.removed_subtopics.iter() {
                                     client_lock.remove_indirect_subscription(subtopic, &topic);
@@ -398,7 +404,8 @@ pub async fn updates_handler<R: Repo>(
 
     while let Some((topic, value)) = updates_receiver.recv().await {
         debug!("handled new update {:?}", topic);
-        let maybe_client_ids = topics.read().await.get_client_ids(&topic);
+        let subscribed_clients = topics.read().await.get_subscribed_clients(&topic);
+        let has_subscribed_clients = !subscribed_clients.is_empty();
 
         let multiupdate = if topic.is_multi_topic() {
             let subtopics = match parse_multitopic_value(&value) {
@@ -415,8 +422,8 @@ pub async fn updates_handler<R: Repo>(
             };
             let mut topics_lock = topics.write().await;
             let multitopic_update = topics_lock.update_multitopic_info(topic.clone(), subtopics);
-            if let Some(ref client_ids) = maybe_client_ids {
-                for client_id in client_ids {
+            if has_subscribed_clients {
+                for client_id in subscribed_clients.keys() {
                     topics_lock.update_indirect_subscriptions(
                         topic.clone(),
                         multitopic_update.clone(),
@@ -450,45 +457,49 @@ pub async fn updates_handler<R: Repo>(
             None
         };
 
-        if let Some(client_ids) = maybe_client_ids {
+        if has_subscribed_clients {
             let broadcasting_start = Instant::now();
 
-            // NB: 1st implementation iterate over client_ids -> find shard for client_id -> acquire shard read lock -> get client lock -> send update
+            // NB: 1st implementation iterate over subscribed_clients.keys() -> find shard for client_id -> acquire shard read lock -> get client lock -> send update
             // but it sometimes leads to deadlock|livelock|star (https://docs.rs/tokio/1.8.1/tokio/sync/struct.RwLock.html#method.read)
             // 2nd implementation iterate over shards -> acquire shard read lock -> iterate over clients, filtered for update -> try to lock client -> send update
             for clients_shard in clients.into_iter() {
-                for (client_id, client) in
-                    clients_shard
-                        .read()
-                        .await
-                        .iter()
-                        .filter_map(|(client_id, client)| {
-                            if client_ids.contains(&client_id) {
-                                Some((client_id, client))
-                            } else {
-                                None
-                            }
-                        })
-                {
+                let clients_shard_lock = clients_shard.read().await;
+                let matching_clients_iter =
+                    clients_shard_lock.iter().filter_map(|(client_id, client)| {
+                        if let Some(direct_subscription_key) = subscribed_clients.get(client_id) {
+                            Some((client_id, client, direct_subscription_key))
+                        } else {
+                            None
+                        }
+                    });
+                for (client_id, client, direct_subscription_key) in matching_clients_iter {
                     debug!("send update to the client#{:?} {:?}", client_id, topic);
-                    let (value, multitopic_update) =
-                        if let Some((multitopic_update, multi_update_value)) = multiupdate.as_ref()
-                        {
-                            (multi_update_value.clone(), Some(multitopic_update))
+                    let (value, multitopic_update) = {
+                        if let Some((multitopic_update, update_value)) = multiupdate.as_ref() {
+                            (update_value.clone(), Some(multitopic_update))
                         } else {
                             (value.clone(), None)
-                        };
+                        }
+                    };
                     loop {
                         match client.try_lock() {
                             Ok(mut client_lock) => {
                                 if let Some(multitopic_update) = multitopic_update {
-                                    for subtopic in
-                                        multitopic_update.added_subtopics.iter().cloned()
-                                    {
-                                        client_lock
-                                            .add_indirect_subscription(subtopic, topic.clone());
+                                    let (added_topics, removed_topics) = (
+                                        multitopic_update.added_subtopics.iter().cloned(),
+                                        multitopic_update.removed_subtopics.iter(),
+                                    );
+                                    for subtopic in added_topics {
+                                        let parent_subscription_key =
+                                            direct_subscription_key.clone().unwrap_or_default();
+                                        client_lock.add_indirect_subscription(
+                                            subtopic,
+                                            topic.clone(),
+                                            parent_subscription_key,
+                                        );
                                     }
-                                    for subtopic in multitopic_update.removed_subtopics.iter() {
+                                    for subtopic in removed_topics {
                                         client_lock.remove_indirect_subscription(subtopic, &topic);
                                     }
                                 }
@@ -515,7 +526,7 @@ pub async fn updates_handler<R: Repo>(
             let broadcasting_end = Instant::now();
             debug!(
                 "update successfully sent to {} clients for {} ms",
-                client_ids.iter().count(),
+                subscribed_clients.len(),
                 broadcasting_end
                     .duration_since(broadcasting_start)
                     .as_millis()
