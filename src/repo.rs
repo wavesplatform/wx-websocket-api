@@ -68,7 +68,13 @@ impl Repo for RepoImpl {
 
     async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<Option<String>>, Error> {
         let mut con = self.pool.get().await?;
-        Ok(con.get(keys).await?)
+        // Need to explicitly handle case with keys.len() == 1
+        // due to the issue https://github.com/mitsuhiko/redis-rs/issues/336
+        match keys.len() {
+            0 => Ok(vec![]),
+            1 => Ok(vec![con.get(keys).await?]),
+            _ => Ok(con.get(keys).await?),
+        }
     }
 
     async fn refresh(&self, topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error> {
