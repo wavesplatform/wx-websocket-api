@@ -368,10 +368,16 @@ impl KeyInfo {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MultitopicUpdate {
     pub added_subtopics: Vec<Topic>,
     pub removed_subtopics: Vec<Topic>,
+}
+
+impl MultitopicUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.added_subtopics.is_empty() && self.removed_subtopics.is_empty()
+    }
 }
 
 impl ClientIdsByTopics {
