@@ -218,7 +218,6 @@ async fn handle_income_message<R: Repo>(
                             client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
                         } else {
                             let mut topics_lock = topics.write().await;
-                            repo.subscribe(subscription_key.clone()).await?;
                             {
                                 let topic = topic.clone();
                                 let key = client_subscription_key.clone();
@@ -262,6 +261,7 @@ async fn handle_income_message<R: Repo>(
                                 }
                                 topics_lock.update_indirect_subscriptions(topic, update, client_id);
                             }
+                            repo.subscribe(subscription_key.clone()).await?;
                         }
                     }
                     IncomeMessage::Unsubscribe {
