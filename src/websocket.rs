@@ -218,7 +218,6 @@ async fn handle_income_message<R: Repo>(
                             client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
                         } else {
                             let mut topics_lock = topics.write().await;
-                            repo.subscribe(subscription_key.clone()).await?;
                             {
                                 let topic = topic.clone();
                                 let key = client_subscription_key.clone();
@@ -262,6 +261,7 @@ async fn handle_income_message<R: Repo>(
                                 }
                                 topics_lock.update_indirect_subscriptions(topic, update, client_id);
                             }
+                            repo.subscribe(subscription_key.clone()).await?;
                         }
                     }
                     IncomeMessage::Unsubscribe {
@@ -419,7 +419,7 @@ pub async fn updates_handler<R: Repo>(
     }
 
     while let Some((topic, value)) = updates_receiver.recv().await {
-        debug!("handled new update {:?}", topic);
+        debug!("handling new update {:?}", topic);
         let subscribed_clients = topics.read().await.get_subscribed_clients(&topic);
         let has_subscribed_clients = !subscribed_clients.is_empty();
 
@@ -450,18 +450,20 @@ pub async fn updates_handler<R: Repo>(
                             };
                             match subtopic_values.await {
                                 Ok(subtopic_values) => {
-                                    if !subtopic_values.is_empty() {
-                                        Update::Multi {
-                                            topic,
-                                            value: subtopic_values.as_json_string(),
-                                            multitopic_update,
-                                        }
-                                    } else {
+                                    if !multitopic_update.is_empty() && subtopic_values.is_empty() {
+                                        debug!("Update ignored: has subtopics but values not available yet");
                                         // Values of the new topics not yet available,
                                         // so just ignore the update,
                                         // it will be received later again as individual
                                         // subtopic update anyway
                                         Update::Ignore
+                                    } else {
+                                        debug!("Update accepted: either has subtopic values or multitopic is empty");
+                                        Update::Multi {
+                                            topic,
+                                            value: subtopic_values.as_json_string(),
+                                            multitopic_update,
+                                        }
                                     }
                                 }
                                 Err(err) => {
@@ -628,6 +630,7 @@ where
 mod values {
     use serde::{Serialize, Serializer};
 
+    #[derive(Debug)]
     pub struct TopicValues(pub Vec<TopicValue>);
 
     #[derive(Clone, Debug, Serialize)]
