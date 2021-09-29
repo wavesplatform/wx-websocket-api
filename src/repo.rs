@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use wavesexchange_topic::Topic;
 
+use self::counter::VersionCounter;
+
 const CONNECTION_ID_KEY: &str = "NEXT_CONNECTION_ID";
 
 pub struct Config {
@@ -32,11 +34,16 @@ pub trait Repo: Send + Sync {
 pub struct RepoImpl {
     pool: bb8::Pool<RedisConnectionManager>,
     key_ttl: Duration,
+    state_version: VersionCounter,
 }
 
 impl RepoImpl {
     pub fn new(pool: bb8::Pool<RedisConnectionManager>, key_ttl: Duration) -> RepoImpl {
-        RepoImpl { pool, key_ttl }
+        RepoImpl {
+            pool,
+            key_ttl,
+            state_version: Default::default(),
+        }
     }
 }
 
@@ -52,11 +59,8 @@ impl Repo for RepoImpl {
         let key = "sub:".to_string() + &key.into();
         let mut con = self.pool.get().await?;
         let key_ttl = self.key_ttl.as_secs() as usize;
-        if con.exists(key.clone()).await? {
-            con.expire(key, key_ttl).await?;
-        } else {
-            con.set_ex(key, 0, key_ttl).await?;
-        }
+        let state_version = self.state_version.next();
+        con.set_ex(key, state_version, key_ttl).await?;
 
         Ok(())
     }
@@ -88,5 +92,19 @@ impl Repo for RepoImpl {
             result.insert(topic, update_time);
         }
         Ok(result)
+    }
+}
+
+mod counter {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    #[derive(Default, Debug)]
+    pub(super) struct VersionCounter(AtomicI32);
+
+    impl VersionCounter {
+        pub(super) fn next(&self) -> i32 {
+            let Self(counter) = self;
+            counter.fetch_add(1, Ordering::SeqCst)
+        }
     }
 }

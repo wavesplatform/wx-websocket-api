@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
-use wavesexchange_log::warn;
+use wavesexchange_log::{debug, warn};
 use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
@@ -20,6 +20,12 @@ pub struct Client {
     sender: ClientSender,
     subscriptions: HashMap<Topic, ClientSubscriptionData>,
     request_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Subscribed {
+    DirectlyWithKey(ClientSubscriptionKey),
+    Indirectly,
 }
 
 #[derive(Debug)]
@@ -108,6 +114,10 @@ impl Client {
         topic: Topic,
         client_subscription_key: ClientSubscriptionKey,
     ) {
+        debug!(
+            "[Client] directly subscribed to {:?}\n\tSubscription key: {:?}",
+            topic, client_subscription_key
+        );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.subscription_key = client_subscription_key;
         subscription_data.is_direct = true;
@@ -119,6 +129,10 @@ impl Client {
         parent_multitopic: Topic,
         client_subscription_key: ClientSubscriptionKey,
     ) {
+        debug!(
+            "[Client] indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
+            topic, parent_multitopic, client_subscription_key
+        );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.indirect_subscription_sources.insert(
             parent_multitopic,
@@ -136,6 +150,7 @@ impl Client {
     }
 
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
+        debug!("[Client] directly unsubscribed from {:?}", topic);
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             subscription_data.is_direct = false;
             let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
@@ -147,6 +162,10 @@ impl Client {
 
     pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
+            debug!(
+                "[Client] indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
+                topic, parent_multitopic
+            );
             subscription_data
                 .indirect_subscription_sources
                 .remove(parent_multitopic);
@@ -241,8 +260,10 @@ impl Client {
         self.sender.message_counter - 1
     }
 
-    pub fn subscription_topics_iter(&self) -> impl Iterator<Item = &Topic> {
-        self.subscriptions.iter().map(|(topic, _)| topic)
+    pub fn subscription_topics_iter(&self) -> impl Iterator<Item = (&Topic, bool, bool)> {
+        self.subscriptions
+            .iter()
+            .map(|(topic, data)| (topic, data.is_direct, data.is_indirect))
     }
 }
 
@@ -387,6 +408,10 @@ impl ClientIdsByTopics {
         client_id: ClientId,
         subscription_key: ClientSubscriptionKey,
     ) {
+        debug!(
+            "[ClientIdsByTopics] Client#{} directly subscribed to {:?}",
+            client_id, subscription_key
+        );
         self.0
             .entry(topic)
             .or_insert_with(KeyInfo::new)
@@ -396,6 +421,10 @@ impl ClientIdsByTopics {
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
         if let Some(key_info) = self.0.get_mut(topic) {
+            debug!(
+                "[ClientIdsByTopics] Client#{} directly unsubscribed from {:?}",
+                client_id, topic
+            );
             key_info.clients.remove(client_id);
             if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
                 self.0.remove(topic);
@@ -438,6 +467,10 @@ impl ClientIdsByTopics {
         client_id: &ClientId,
     ) {
         for topic in update.added_subtopics {
+            debug!(
+                "[ClientIdsByTopics] Client#{} indirectly subscribed to {:?}",
+                client_id, topic
+            );
             self.0
                 .entry(topic)
                 .or_insert_with(KeyInfo::new)
@@ -450,6 +483,10 @@ impl ClientIdsByTopics {
         for topic in update.removed_subtopics {
             if let Some(key_info) = self.0.get_mut(&topic) {
                 if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
+                    debug!(
+                        "[ClientIdsByTopics] Client#{} indirectly unsubscribed from {:?}",
+                        client_id, topic
+                    );
                     multitopics.remove(&multitopic);
                     if multitopics.is_empty() {
                         key_info.indirect_clients.remove(client_id);
@@ -476,6 +513,10 @@ impl ClientIdsByTopics {
             for topic in subtopics.iter() {
                 if let Some(key_info) = self.0.get_mut(topic) {
                     if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
+                        debug!(
+                            "[ClientIdsByTopics] Client#{} indirectly unsubscribed from {:?}",
+                            client_id, topic
+                        );
                         multitopics.remove(multitopic);
                         if multitopics.is_empty() {
                             key_info.indirect_clients.remove(client_id);
@@ -492,10 +533,7 @@ impl ClientIdsByTopics {
         }
     }
 
-    pub fn get_subscribed_clients(
-        &self,
-        topic: &Topic,
-    ) -> HashMap<ClientId, Option<ClientSubscriptionKey>> {
+    pub fn get_subscribed_clients(&self, topic: &Topic) -> HashMap<ClientId, Subscribed> {
         self.0
             .get(topic)
             .map(|key_info| {
@@ -504,13 +542,16 @@ impl ClientIdsByTopics {
                         .clients
                         .iter()
                         .map(|(client_id, subscription_key)| {
-                            (client_id.clone(), Some(subscription_key.clone()))
+                            (
+                                client_id.clone(),
+                                Subscribed::DirectlyWithKey(subscription_key.clone()),
+                            )
                         });
 
                 let indirect_clients = key_info
                     .indirect_clients
                     .keys()
-                    .map(|client_id| (client_id.clone(), None));
+                    .map(|client_id| (client_id.clone(), Subscribed::Indirectly));
 
                 direct_clients.chain(indirect_clients).collect()
             })
