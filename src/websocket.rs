@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
-use wavesexchange_log::{debug, error, info};
+use wavesexchange_log::{debug, error, info, trace};
 use wavesexchange_topic::{State, StateSingle, Topic};
 
-use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Topics};
+use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
 use crate::metrics::CLIENTS;
@@ -45,6 +45,9 @@ pub async fn handle_connection<R: Repo>(
     shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await?;
+
+    info!("Client#{} connected", client_id);
+
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Arc::new(Mutex::new(Client::new(
@@ -106,13 +109,13 @@ async fn run<R: Repo>(
                     let msg = match next_msg_result {
                         Ok(msg) => msg,
                         Err(disconnected) => {
-                            debug!("client #{} connection was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
+                            debug!("Connection to Client#{} was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
-                        debug!("client #{} connection was closed", client_id; "req_id" => request_id);
+                        debug!("Connection to Client#{} was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
@@ -136,12 +139,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("error occurred while processing client #{} message: {:?} – {:?}", client_id, msg, err);
+                            error!("Error occurred while processing Client#{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("error occurred while sending message to client #{}", client_id);
+                        error!("Error occurred while sending message to Client#{}", client_id);
                         break;
                     }
                 }
@@ -149,7 +152,7 @@ async fn run<R: Repo>(
             // outcome message (to ws)
             msg = client_rx.recv() => {
                 if let Some(message) = msg {
-                    debug!("send message to the client#{:?}", client_id);
+                    debug!("Sending message to Client#{:?}", client_id);
                     if let Err(err) = socket.send(message).await {
                         error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
                         break;
@@ -164,18 +167,18 @@ async fn run<R: Repo>(
                     match client.try_lock() {
                         Ok(mut client_lock) => {
                             if client_lock.pings_len() >= options.ping_failures_threshold {
-                                debug!("client #{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
+                                debug!("Client#{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
                                 break;
                             }
                             if let Err(error) = client_lock.send_ping() {
-                                error!("error occurred while sending ping message to client #{}: {:?}", client_id, error);
+                                error!("Error occurred while sending ping message to Client#{}: {:?}", client_id, error);
                                 break;
                             }
                             break;
                         }
                         Err(_) => {
                             debug!(
-                                "client #{} is locked while ping sending, try to wait",
+                                "Client#{} is locked while ping sending, try to wait",
                                 client_id
                             );
                             tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -209,13 +212,21 @@ async fn handle_income_message<R: Repo>(
                     IncomeMessage::Subscribe {
                         topic: client_subscription_key,
                     } => {
+                        debug!(
+                            "Handling Client{} subscription to key {:?}",
+                            client_id, client_subscription_key
+                        );
                         let topic = Topic::try_from(&client_subscription_key)?;
                         let subscription_key = String::from(topic.clone());
 
                         if client_lock.contains_subscription(&topic) {
-                            let message =
-                                "You are already subscribed for the specified topic".to_string();
-                            client_lock.send_error(ALREADY_SUBSCRIBED_ERROR_CODE, message, None)?;
+                            const ALREADY_SUBSCRIBED_ERROR_MESSAGE: &'static str =
+                                "You are already subscribed for the specified topic";
+                            client_lock.send_error(
+                                ALREADY_SUBSCRIBED_ERROR_CODE,
+                                ALREADY_SUBSCRIBED_ERROR_MESSAGE.to_string(),
+                                None,
+                            )?;
                         } else {
                             let mut topics_lock = topics.write().await;
                             {
@@ -224,16 +235,28 @@ async fn handle_income_message<R: Repo>(
                                 client_lock.add_direct_subscription(topic, key);
                             }
                             let value = repo.get_by_key(&subscription_key).await?;
+                            trace!("  Topic current value in Redis: {:?}", value);
                             let subtopics;
                             if let Some(value) = value {
                                 let send_value;
                                 if topic.is_multi_topic() {
                                     let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
-                                    subtopics =
-                                        Some(HashSet::from_iter(subtopics_vec.iter().cloned()));
+                                    trace!(
+                                        "  Subtopics ({}): {:?}",
+                                        subtopics_vec.len(),
+                                        subtopics_vec
+                                    );
+                                    subtopics = Some(HashSet::<Topic>::from_iter(
+                                        subtopics_vec.iter().cloned(),
+                                    ));
                                     let subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
+                                    trace!(
+                                        "  Subtopic values ({}): {:?}",
+                                        subtopic_values.0.len(),
+                                        subtopic_values
+                                    );
                                     send_value = subtopic_values.as_json_string();
                                 } else {
                                     send_value = value;
@@ -247,18 +270,20 @@ async fn handle_income_message<R: Repo>(
                             let key = client_subscription_key.clone();
                             topics_lock.add_subscription(topic.clone(), *client_id, key);
                             if let Some(subtopics) = subtopics {
-                                let update =
-                                    topics_lock.update_multitopic_info(topic.clone(), subtopics);
-                                for subtopic in update.added_subtopics.iter().cloned() {
+                                let _ = topics_lock
+                                    .update_multitopic_info(topic.clone(), subtopics.clone());
+                                for subtopic in subtopics.iter().cloned() {
+                                    trace!("    Subtopic: {:?}", subtopic);
                                     client_lock.add_indirect_subscription(
                                         subtopic,
                                         topic.clone(),
                                         client_subscription_key.clone(),
                                     );
                                 }
-                                for subtopic in update.removed_subtopics.iter() {
-                                    client_lock.remove_indirect_subscription(subtopic, &topic);
-                                }
+                                let update = MultitopicUpdate {
+                                    added_subtopics: subtopics.iter().cloned().collect(),
+                                    removed_subtopics: vec![],
+                                };
                                 topics_lock.update_indirect_subscriptions(topic, update, client_id);
                             }
                             repo.subscribe(subscription_key.clone()).await?;
@@ -289,7 +314,7 @@ async fn handle_income_message<R: Repo>(
             }
             Err(_) => {
                 debug!(
-                    "client #{} is locked while income message handling, try to wait",
+                    "Client#{} is locked while income message handling, try to wait",
                     client_id
                 );
                 tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -321,7 +346,7 @@ async fn send_error(
             }
             Err(_) => {
                 debug!(
-                    "client #{} is locked while error sending, try to wait",
+                    "Client#{} is locked while error sending, try to wait",
                     client_id
                 );
                 tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -347,20 +372,25 @@ async fn on_disconnect(
             Ok(client_lock) => {
                 // remove topics from Topics
                 stream::iter(client_lock.subscription_topics_iter())
-                    .map(|topic| (topic, &topics))
-                    .for_each_concurrent(20, |(topic, topics)| async move {
+                    .map(|(topic, is_direct, is_indirect)| (topic, is_direct, is_indirect, &topics))
+                    .for_each_concurrent(20, |(topic, is_direct, is_indirect, topics)| async move {
                         let mut topics_lock = topics.write().await;
                         if topic.is_multi_topic() {
                             let _ = topics_lock.remove_indirect_subscriptions(topic, &client_id);
                             // Since we are dropping the disconnected client anyway,
                             // don't bother removing individual indirect subscriptions
                         }
-                        topics_lock.remove_subscription(topic, &client_id);
+                        if is_direct {
+                            topics_lock.remove_subscription(topic, &client_id);
+                        }
+                        if is_indirect {
+                            // Will be deleted when the corresponding multitopic is deleted
+                        }
                     })
                     .await;
 
                 info!(
-                    "client #{} disconnected; he got {} messages",
+                    "Client#{} disconnected; he got {} messages",
                     client_id,
                     client_lock.messages_count();
                     "req_id" => client_lock.get_request_id().clone()
@@ -370,7 +400,7 @@ async fn on_disconnect(
             }
             Err(_) => {
                 debug!(
-                    "client #{} is locked while disconnecting, try to wait",
+                    "Client#{} is locked while disconnecting, try to wait",
                     client_id
                 );
                 tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -382,13 +412,13 @@ async fn on_disconnect(
     }
 
     debug!(
-        "client#{} subscriptions cleared; remove him from clients",
+        "Client#{} subscriptions cleared; remove him from clients",
         client_id
     );
 
     clients.get(&client_id).write().await.remove(&client_id);
 
-    debug!("client#{} removed from clients", client_id);
+    debug!("Client#{} removed from clients", client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
@@ -419,9 +449,15 @@ pub async fn updates_handler<R: Repo>(
     }
 
     while let Some((topic, value)) = updates_receiver.recv().await {
-        debug!("handling new update {:?}", topic);
         let subscribed_clients = topics.read().await.get_subscribed_clients(&topic);
         let has_subscribed_clients = !subscribed_clients.is_empty();
+        debug!(
+            "Topic updated in Redis: {:?}\n\tValue: {:?}\n\tSubscribed clients ({}): {:?}",
+            topic,
+            value,
+            subscribed_clients.len(),
+            subscribed_clients,
+        );
 
         let update = {
             if topic.is_multi_topic() {
@@ -513,14 +549,14 @@ pub async fn updates_handler<R: Repo>(
             let clients_shard_lock = clients_shard.read().await;
             let matching_clients_iter =
                 clients_shard_lock.iter().filter_map(|(client_id, client)| {
-                    if let Some(direct_subscription_key) = subscribed_clients.get(client_id) {
-                        Some((client_id, client, direct_subscription_key))
+                    if let Some(subscribed) = subscribed_clients.get(client_id) {
+                        Some((client_id, client, subscribed))
                     } else {
                         None
                     }
                 });
-            for (client_id, client, direct_subscription_key) in matching_clients_iter {
-                debug!("send update to the client#{:?}", client_id);
+            for (client_id, client, subscribed) in matching_clients_iter {
+                debug!("Sending update to Client#{:?}", client_id);
                 loop {
                     match client.try_lock() {
                         Ok(mut client_lock) => {
@@ -536,8 +572,10 @@ pub async fn updates_handler<R: Repo>(
                                         multitopic_update.removed_subtopics.iter(),
                                     );
                                     for subtopic in added_topics {
-                                        let parent_subscription_key =
-                                            direct_subscription_key.clone().unwrap_or_default();
+                                        let parent_subscription_key = match subscribed {
+                                            Subscribed::DirectlyWithKey(ref key) => key.clone(),
+                                            Subscribed::Indirectly => Default::default(),
+                                        };
                                         client_lock.add_indirect_subscription(
                                             subtopic,
                                             topic.clone(),
@@ -558,7 +596,7 @@ pub async fn updates_handler<R: Repo>(
                         }
                         Err(_) => {
                             debug!(
-                                "client #{} is locked while sending update, try to wait",
+                                "Client#{} is locked while sending update, try to wait",
                                 client_id
                             );
                             tokio::time::sleep(tokio::time::Duration::from_millis(
