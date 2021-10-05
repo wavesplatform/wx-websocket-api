@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use wavesexchange_topic::Topic;
 
+use self::counter::VersionCounter;
+
 const CONNECTION_ID_KEY: &str = "NEXT_CONNECTION_ID";
 
 pub struct Config {
@@ -24,17 +26,24 @@ pub trait Repo: Send + Sync {
 
     async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error>;
 
+    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<Option<String>>, Error>;
+
     async fn refresh(&self, topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error>;
 }
 
 pub struct RepoImpl {
     pool: bb8::Pool<RedisConnectionManager>,
     key_ttl: Duration,
+    state_version: VersionCounter,
 }
 
 impl RepoImpl {
     pub fn new(pool: bb8::Pool<RedisConnectionManager>, key_ttl: Duration) -> RepoImpl {
-        RepoImpl { pool, key_ttl }
+        RepoImpl {
+            pool,
+            key_ttl,
+            state_version: Default::default(),
+        }
     }
 }
 
@@ -50,11 +59,8 @@ impl Repo for RepoImpl {
         let key = "sub:".to_string() + &key.into();
         let mut con = self.pool.get().await?;
         let key_ttl = self.key_ttl.as_secs() as usize;
-        if con.exists(key.clone()).await? {
-            con.expire(key, key_ttl).await?;
-        } else {
-            con.set_ex(key, 0, key_ttl).await?;
-        }
+        let state_version = self.state_version.next();
+        con.set_ex(key, state_version, key_ttl).await?;
 
         Ok(())
     }
@@ -62,6 +68,17 @@ impl Repo for RepoImpl {
     async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error> {
         let mut con = self.pool.get().await?;
         Ok(con.get(key).await?)
+    }
+
+    async fn get_by_keys(&self, keys: Vec<String>) -> Result<Vec<Option<String>>, Error> {
+        let mut con = self.pool.get().await?;
+        // Need to explicitly handle case with keys.len() == 1
+        // due to the issue https://github.com/mitsuhiko/redis-rs/issues/336
+        match keys.len() {
+            0 => Ok(vec![]),
+            1 => Ok(vec![con.get(keys).await?]),
+            _ => Ok(con.get(keys).await?),
+        }
     }
 
     async fn refresh(&self, topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error> {
@@ -75,5 +92,19 @@ impl Repo for RepoImpl {
             result.insert(topic, update_time);
         }
         Ok(result)
+    }
+}
+
+mod counter {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    #[derive(Default, Debug)]
+    pub(super) struct VersionCounter(AtomicI32);
+
+    impl VersionCounter {
+        pub(super) fn next(&self) -> i32 {
+            let Self(counter) = self;
+            counter.fetch_add(1, Ordering::SeqCst)
+        }
     }
 }

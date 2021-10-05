@@ -7,7 +7,7 @@ lazy_static! {
             .expect("can't create clients metrics");
     pub static ref MESSAGES: Counter = Counter::new(
         "Backend_websocket_Messages_count",
-        "Count of messages sended to clients"
+        "Count of messages sent to clients"
     )
     .expect("can't create messages metrics");
 }

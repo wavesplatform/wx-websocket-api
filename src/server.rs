@@ -26,7 +26,7 @@ pub fn start<R: Repo + 'static>(
     server_port: u16,
     repo: Arc<R>,
     clients: Arc<Sharded<Clients>>,
-    topics: Arc<Sharded<Topics>>,
+    topics: Arc<Topics>,
     options: ServerOptions,
     shutdown_signal: tokio::sync::mpsc::Sender<()>,
 ) -> (
