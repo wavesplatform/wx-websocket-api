@@ -12,7 +12,7 @@ use wavesexchange_topic::{State, StateSingle, Topic};
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
-use crate::metrics::CLIENTS;
+use crate::metrics::{CLIENTS, LATENCIES};
 use crate::repo::Repo;
 use crate::shard::Sharded;
 
@@ -216,6 +216,9 @@ async fn handle_income_message<R: Repo>(
                             "Handling Client{} subscription to key {:?}",
                             client_id, client_subscription_key
                         );
+
+                        let latency_timer = LATENCIES.start_timer();
+
                         let topic = Topic::try_from(&client_subscription_key)?;
                         let subscription_key = String::from(topic.clone());
 
@@ -263,9 +266,15 @@ async fn handle_income_message<R: Repo>(
                                     subtopics = None;
                                 }
                                 client_lock.send_subscribed(&topic, send_value)?;
+                                let latency = latency_timer.stop_and_record();
+                                debug!(
+                                    "Latency {}ms (immediate send), topic {:?}",
+                                    latency * 1_000_f64,
+                                    topic
+                                );
                             } else {
                                 subtopics = None;
-                                client_lock.mark_subscription_as_new(topic.clone());
+                                client_lock.mark_subscription_as_new(topic.clone(), latency_timer);
                             }
                             let key = client_subscription_key.clone();
                             topics_lock.add_subscription(topic.clone(), *client_id, key);
@@ -369,7 +378,8 @@ async fn on_disconnect(
 ) -> () {
     loop {
         match client.try_lock() {
-            Ok(client_lock) => {
+            Ok(mut client_lock) => {
+                client_lock.on_disconnect();
                 // remove topics from Topics
                 stream::iter(client_lock.subscription_topics_iter())
                     .map(|(topic, is_direct, is_indirect)| (topic, is_direct, is_indirect, &topics))

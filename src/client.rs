@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
 use crate::metrics::MESSAGES;
+use prometheus::HistogramTimer;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -52,6 +53,8 @@ struct ClientSubscriptionData {
     is_indirect: bool,
     /// Last value of indirect balance (to allow computation of delta value).
     leasing_balance_last_value: Option<LeasingBalance>,
+    /// Timer that counts latency between 'Subscribe' and 'Subscribed' messages
+    latency_timer: Option<HistogramTimer>,
 }
 
 #[derive(Default, Debug)]
@@ -143,10 +146,13 @@ impl Client {
         subscription_data.is_indirect = true;
     }
 
-    pub fn mark_subscription_as_new(&mut self, topic: Topic) {
+    pub fn mark_subscription_as_new(&mut self, topic: Topic, timer: HistogramTimer) {
         self.subscriptions
             .entry(topic)
-            .and_modify(|subscription_data| subscription_data.is_new = true);
+            .and_modify(|subscription_data| {
+                subscription_data.is_new = true;
+                subscription_data.latency_timer = Some(timer);
+            });
     }
 
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
@@ -236,6 +242,15 @@ impl Client {
                     self.sender.send_update(subscription_key, value)?;
                 }
             }
+
+            if let Some(latency_timer) = subscription_data.latency_timer.take() {
+                let latency = latency_timer.stop_and_record();
+                debug!(
+                    "Latency {}ms (delayed send), topic {:?}",
+                    latency * 1_000_f64,
+                    topic
+                );
+            }
         }
         Ok(())
     }
@@ -254,6 +269,19 @@ impl Client {
         details: Option<HashMap<String, String>>,
     ) -> Result<(), Error> {
         self.sender.send_error(code, message, details)
+    }
+
+    pub fn on_disconnect(&mut self) {
+        for (topic, subscription_data) in self.subscriptions.iter_mut() {
+            if let Some(latency_timer) = subscription_data.latency_timer.take() {
+                let latency = latency_timer.stop_and_discard();
+                debug!(
+                    "Subscription aborted after {}ms waiting, topic {:?}",
+                    latency * 1_000_f64,
+                    topic
+                );
+            }
+        }
     }
 
     pub fn messages_count(&self) -> i64 {
