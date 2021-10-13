@@ -11,7 +11,7 @@ lazy_static! {
         "Count of messages sent to clients"
     )
     .expect("can't create messages metrics");
-    pub static ref LATENCIES: Histogram = Histogram::with_opts(
+    pub static ref SUBSCRIBED_MESSAGE_LATENCIES: Histogram = Histogram::with_opts(
         HistogramOpts::new(
             "Backend_websocket_Latencies_histogram",
             "Histogram of subscription latency time"
@@ -19,6 +19,11 @@ lazy_static! {
         .buckets(exponential_buckets(0.001, 2.0, 18).expect("can't create histogram buckets"))
     )
     .expect("can't create latencies metrics");
+    pub static ref REDIS_INPUT_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "Backend_websocket_Queue_size",
+        "Size of incoming Redis messages queue"
+    )
+    .expect("can't create message_queue metrics");
 }
 
 pub fn register_metrics() {
@@ -31,6 +36,10 @@ pub fn register_metrics() {
         .expect("can't register messages metrics");
 
     REGISTRY
-        .register(Box::new(LATENCIES.clone()))
-        .expect("can't register latencies metrics");
+        .register(Box::new(SUBSCRIBED_MESSAGE_LATENCIES.clone()))
+        .expect("can't register subscribed_message_latencies metrics");
+
+    REGISTRY
+        .register(Box::new(REDIS_INPUT_QUEUE_SIZE.clone()))
+        .expect("can't register redis_input_queue_size metrics");
 }

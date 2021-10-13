@@ -12,7 +12,7 @@ use wavesexchange_topic::{State, StateSingle, Topic};
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
-use crate::metrics::{CLIENTS, LATENCIES};
+use crate::metrics::{CLIENTS, REDIS_INPUT_QUEUE_SIZE, SUBSCRIBED_MESSAGE_LATENCIES};
 use crate::repo::Repo;
 use crate::shard::Sharded;
 
@@ -217,7 +217,7 @@ async fn handle_income_message<R: Repo>(
                             client_id, client_subscription_key
                         );
 
-                        let latency_timer = LATENCIES.start_timer();
+                        let latency_timer = SUBSCRIBED_MESSAGE_LATENCIES.start_timer();
 
                         let topic = Topic::try_from(&client_subscription_key)?;
                         let subscription_key = String::from(topic.clone());
@@ -459,6 +459,7 @@ pub async fn updates_handler<R: Repo>(
     }
 
     while let Some((topic, value)) = updates_receiver.recv().await {
+        REDIS_INPUT_QUEUE_SIZE.dec();
         let subscribed_clients = topics.read().await.get_subscribed_clients(&topic);
         let has_subscribed_clients = !subscribed_clients.is_empty();
         debug!(
