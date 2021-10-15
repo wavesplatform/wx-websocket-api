@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::metrics::REDIS_INPUT_QUEUE_SIZE;
 use std::convert::TryFrom;
 use wavesexchange_log::{debug, info};
 use wavesexchange_topic::Topic;
@@ -22,6 +23,7 @@ pub fn run(
                 Ok(msg) => {
                     if let Ok(topic) = Topic::try_from(msg.get_channel_name()) {
                         let value = msg.get_payload::<String>()?;
+                        REDIS_INPUT_QUEUE_SIZE.inc();
                         updates_sender
                             .send((topic, value))
                             .expect("error occurred while sending resource update");
