@@ -213,7 +213,7 @@ async fn handle_income_message<R: Repo>(
                         topic: client_subscription_key,
                     } => {
                         debug!(
-                            "Handling Client{} subscription to key {:?}",
+                            "Handling Client#{} subscription to key {:?}",
                             client_id, client_subscription_key
                         );
 
@@ -498,14 +498,14 @@ pub async fn updates_handler<R: Repo>(
                             match subtopic_values.await {
                                 Ok(subtopic_values) => {
                                     if !multitopic_update.is_empty() && subtopic_values.is_empty() {
-                                        debug!("Update ignored: has subtopics but values not available yet");
+                                        debug!("Update ignored: has subtopics but values not available yet"; "topic" => format!("{:?}", topic));
                                         // Values of the new topics not yet available,
                                         // so just ignore the update,
                                         // it will be received later again as individual
                                         // subtopic update anyway
                                         Update::Ignore
                                     } else {
-                                        debug!("Update accepted: either has subtopic values or multitopic is empty");
+                                        debug!("Update accepted: either has subtopic values or multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
                                         Update::Multi {
                                             topic,
                                             value: subtopic_values.as_json_string(),
@@ -516,23 +516,23 @@ pub async fn updates_handler<R: Repo>(
                                 Err(err) => {
                                     error!(
                                         "failed to build update for multitopic {}; error = {}",
-                                        String::from(topic),
-                                        err
+                                        format!("{:?}", topic),
+                                        err; "topic" => format!("{:?}", topic)
                                     );
                                     Update::Ignore
                                 }
                             }
                         } else {
-                            debug!("there are not any clients to send update");
+                            debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
                             Update::Ignore
                         }
                     }
                     Err(err) => {
                         error!(
                             "multitopic {} has unrecognized value {}; error = {}",
-                            String::from(topic),
+                            format!("{:?}", topic),
                             value,
-                            err
+                            err; "topic" => format!("{:?}", topic)
                         );
                         Update::Ignore
                     }
@@ -541,7 +541,7 @@ pub async fn updates_handler<R: Repo>(
                 if has_subscribed_clients {
                     Update::Single { topic, value }
                 } else {
-                    debug!("there are not any clients to send update");
+                    debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
                     Update::Ignore
                 }
             }
