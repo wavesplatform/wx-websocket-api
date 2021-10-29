@@ -239,16 +239,17 @@ async fn handle_income_message<R: Repo>(
                                 client_lock.add_direct_subscription(topic, key);
                             }
                             let value = repo.get_by_key(&subscription_key).await?;
-                            trace!("  Topic current value in Redis: {:?}", value);
+                            debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
                             let subtopics;
                             if let Some(value) = value {
                                 let send_value;
                                 if topic.is_multi_topic() {
                                     let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
-                                    trace!(
-                                        "  Subtopics ({}): {:?}",
+                                    debug!(
+                                        "Subtopics ({}): {:?}",
                                         subtopics_vec.len(),
-                                        subtopics_vec
+                                        subtopics_vec;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     subtopics = Some(HashSet::<Topic>::from_iter(
                                         subtopics_vec.iter().cloned(),
@@ -256,10 +257,11 @@ async fn handle_income_message<R: Repo>(
                                     let subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
-                                    trace!(
-                                        "  Subtopic values ({}): {:?}",
+                                    debug!(
+                                        "Subtopic values ({}): {:?}",
                                         subtopic_values.0.len(),
-                                        subtopic_values
+                                        subtopic_values;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     send_value = subtopic_values.as_json_string();
                                 } else {
