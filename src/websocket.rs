@@ -51,6 +51,7 @@ pub async fn handle_connection<R: Repo>(
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Arc::new(Mutex::new(Client::new(
+        client_id,
         client_tx.clone(),
         request_id.clone(),
     )));
