@@ -18,6 +18,7 @@ pub struct ClientSubscriptionKey(pub String);
 
 #[derive(Debug)]
 pub struct Client {
+    client_id: ClientId,
     sender: ClientSender,
     subscriptions: HashMap<Topic, ClientSubscriptionData>,
     request_id: Option<String>,
@@ -90,10 +91,12 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
 
 impl Client {
     pub fn new(
+        client_id: ClientId,
         sender: tokio::sync::mpsc::UnboundedSender<Message>,
         request_id: Option<String>,
     ) -> Self {
         Client {
+            client_id,
             sender: ClientSender {
                 sender,
                 message_counter: 1,
@@ -118,8 +121,8 @@ impl Client {
         client_subscription_key: ClientSubscriptionKey,
     ) {
         debug!(
-            "[Client] directly subscribed to {:?}\n\tSubscription key: {:?}",
-            topic, client_subscription_key
+            "[Client] Client#{} directly subscribed to {:?}\n\tSubscription key: {:?}",
+            self.client_id, topic, client_subscription_key
         );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.subscription_key = client_subscription_key;
@@ -133,8 +136,8 @@ impl Client {
         client_subscription_key: ClientSubscriptionKey,
     ) {
         debug!(
-            "[Client] indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
-            topic, parent_multitopic, client_subscription_key
+            "[Client] Client#{} indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
+            self.client_id, topic, parent_multitopic, client_subscription_key
         );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.indirect_subscription_sources.insert(
@@ -156,7 +159,10 @@ impl Client {
     }
 
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
-        debug!("[Client] directly unsubscribed from {:?}", topic);
+        debug!(
+            "[Client] Client#{} directly unsubscribed from {:?}",
+            self.client_id, topic
+        );
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             subscription_data.is_direct = false;
             let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
@@ -169,8 +175,8 @@ impl Client {
     pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             debug!(
-                "[Client] indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
-                topic, parent_multitopic
+                "[Client] Client#{} indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
+                self.client_id, topic, parent_multitopic
             );
             subscription_data
                 .indirect_subscription_sources

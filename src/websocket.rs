@@ -51,6 +51,7 @@ pub async fn handle_connection<R: Repo>(
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Arc::new(Mutex::new(Client::new(
+        client_id,
         client_tx.clone(),
         request_id.clone(),
     )));
@@ -479,6 +480,7 @@ pub async fn updates_handler<R: Repo>(
                             let topic = topic.clone();
                             topics_lock.update_multitopic_info(topic, subtopics)
                         };
+                        debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
                         if has_subscribed_clients {
                             for client_id in subscribed_clients.keys() {
                                 topics_lock.update_indirect_subscriptions(
@@ -497,20 +499,28 @@ pub async fn updates_handler<R: Repo>(
                             };
                             match subtopic_values.await {
                                 Ok(subtopic_values) => {
-                                    if !multitopic_update.is_empty() && subtopic_values.is_empty() {
+                                    debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
+                                    let multitopic_is_empty = multitopic_update.is_empty(); //TODO maybe `subtopics.is_empty()`?
+                                    let subtopic_values_available = !subtopic_values.is_empty();
+                                    if multitopic_is_empty {
+                                        debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                    }
+                                    if subtopic_values_available {
+                                        debug!("Update accepted: subtopic values available"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                    }
+                                    if multitopic_is_empty || subtopic_values_available {
+                                        Update::Multi {
+                                            topic,
+                                            value: subtopic_values.as_json_string(),
+                                            multitopic_update,
+                                        }
+                                    } else {
                                         debug!("Update ignored: has subtopics but values not available yet"; "topic" => format!("{:?}", topic));
                                         // Values of the new topics not yet available,
                                         // so just ignore the update,
                                         // it will be received later again as individual
                                         // subtopic update anyway
                                         Update::Ignore
-                                    } else {
-                                        debug!("Update accepted: either has subtopic values or multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
-                                        Update::Multi {
-                                            topic,
-                                            value: subtopic_values.as_json_string(),
-                                            multitopic_update,
-                                        }
                                     }
                                 }
                                 Err(err) => {
