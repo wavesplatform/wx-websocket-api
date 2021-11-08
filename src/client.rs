@@ -471,7 +471,15 @@ impl ClientIdsByTopics {
         multitopic: Topic,
         subtopics: HashSet<Topic>,
     ) -> MultitopicUpdate {
-        let key_info = self.0.entry(multitopic).or_insert_with(KeyInfo::new);
+        let key_info = self
+            .0
+            .entry(multitopic.clone())
+            .or_insert_with(KeyInfo::new);
+
+        debug!(
+            "Updating multitopic {:?}: subtopics {:?}, current key_info {:?}",
+            multitopic, subtopics, key_info
+        );
 
         let added_subtopics = subtopics
             .difference(&key_info.subtopics)
