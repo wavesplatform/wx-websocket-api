@@ -239,16 +239,17 @@ async fn handle_income_message<R: Repo>(
                                 client_lock.add_direct_subscription(topic, key);
                             }
                             let value = repo.get_by_key(&subscription_key).await?;
-                            trace!("  Topic current value in Redis: {:?}", value);
+                            debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
                             let subtopics;
                             if let Some(value) = value {
                                 let send_value;
                                 if topic.is_multi_topic() {
                                     let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
-                                    trace!(
-                                        "  Subtopics ({}): {:?}",
+                                    debug!(
+                                        "Subtopics ({}): {:?}",
                                         subtopics_vec.len(),
-                                        subtopics_vec
+                                        subtopics_vec;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     subtopics = Some(HashSet::<Topic>::from_iter(
                                         subtopics_vec.iter().cloned(),
@@ -256,10 +257,11 @@ async fn handle_income_message<R: Repo>(
                                     let subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
-                                    trace!(
-                                        "  Subtopic values ({}): {:?}",
+                                    debug!(
+                                        "Subtopic values ({}): {:?}",
                                         subtopic_values.0.len(),
-                                        subtopic_values
+                                        subtopic_values;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     send_value = subtopic_values.as_json_string();
                                 } else {
@@ -280,6 +282,7 @@ async fn handle_income_message<R: Repo>(
                             let key = client_subscription_key.clone();
                             topics_lock.add_subscription(topic.clone(), *client_id, key);
                             if let Some(subtopics) = subtopics {
+                                debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
                                 let _ = topics_lock
                                     .update_multitopic_info(topic.clone(), subtopics.clone());
                                 for subtopic in subtopics.iter().cloned() {
@@ -475,6 +478,7 @@ pub async fn updates_handler<R: Repo>(
             if topic.is_multi_topic() {
                 match parse_subtopic_list::<HashSet<_>>(&value) {
                     Ok(subtopics) => {
+                        debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
                         let mut topics_lock = topics.write().await;
                         let multitopic_update = {
                             let topic = topic.clone();
