@@ -603,64 +603,105 @@ impl ClientIdsByTopics {
     }
 }
 
-#[test]
-fn leasing_balance_diff_test() {
-    // changed both fields
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
-    // changed only out
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
-    // changed only in
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
-    // no changes
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, convert::TryFrom};
+    use wavesexchange_topic::Topic;
+
+    use super::ClientIdsByTopics;
+    use crate::client::{leasing_balance_diff, ClientSubscriptionKey, LeasingBalance};
+
+    #[test]
+    fn should_correctly_update_multitopic_info() -> anyhow::Result<()> {
+        let multitopic_subscription_key = "topic://state?address__in[]=3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV&key__match_any[]=%s%s%s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__*";
+        let multitopic = Topic::try_from(multitopic_subscription_key)?;
+
+        let subtopic_subscription_key = "topic://state/3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV/%25s%25s%25s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__7KZbJrVopwJhkdwbe1eFDBbex4dkY63MxjTNjqXtrzj1";
+        let subtopic = Topic::try_from(subtopic_subscription_key)?;
+
+        let mut target = ClientIdsByTopics::default();
+        let mut subtopics = HashSet::new();
+        subtopics.insert(subtopic.clone());
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+        assert_eq!(multitopic_update.added_subtopics, vec![subtopic.clone()]);
+
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+        assert_eq!(multitopic_update.added_subtopics, vec![]);
+
+        // Check whether adding subscriptions before update multitopic info is valid
+        let mut target = ClientIdsByTopics::default();
+
+        let subscribtion_key = ClientSubscriptionKey(multitopic_subscription_key.to_owned());
+        target.add_subscription(multitopic.clone(), 1, subscribtion_key);
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+
+        assert_eq!(multitopic_update.added_subtopics, vec![subtopic]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn leasing_balance_diff_test() {
+        // changed both fields
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 5,
+            balance_out: 8,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+        // changed only out
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 8,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
+        // changed only in
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 5,
+            balance_out: 2,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
+        // no changes
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+    }
 }
