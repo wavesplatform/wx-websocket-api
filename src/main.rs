@@ -42,8 +42,15 @@ async fn tokio_main() -> Result<(), Error> {
     let topics = Arc::new(client::Topics::default());
 
     let manager = RedisConnectionManager::new(redis_connection_url.clone())?;
-    let pool = bb8::Pool::builder().build(manager).await?;
-    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.key_ttl));
+    let pool = bb8::Pool::builder()
+        .max_size(repo_config.max_pool_size)
+        .build(manager)
+        .await?;
+    let repo = Arc::new(RepoImpl::new(
+        pool.clone(),
+        repo_config.key_ttl,
+        repo_config.refresh_threads as usize,
+    ));
 
     let keys_refresher = KeysRefresher::new(repo.clone(), repo_config.key_ttl, topics.clone());
     let keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });

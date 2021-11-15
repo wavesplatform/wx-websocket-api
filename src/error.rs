@@ -4,6 +4,8 @@ use wavesexchange_topic::Topic;
 pub enum Error {
     #[error("ConfigLoadError: {0}")]
     ConfigLoadError(#[from] envy::Error),
+    #[error("ConfigValidationError: {0}")]
+    ConfigValidationError(String),
     #[error("JoinError: {0}")]
     JoinError(#[from] tokio::task::JoinError),
     #[error("WarpError: {0}")]
