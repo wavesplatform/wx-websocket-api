@@ -28,6 +28,10 @@ fn default_max_pool_size() -> u32 {
     10
 }
 
+fn default_refresh_threads() -> u16 {
+    1
+}
+
 #[derive(Deserialize)]
 struct FlatServerConfig {
     #[serde(default = "default_port")]
@@ -49,6 +53,8 @@ struct FlatRepoConfig {
     pub key_ttl: u64,
     #[serde(default = "default_max_pool_size")]
     pub max_pool_size: u32,
+    #[serde(default = "default_refresh_threads")]
+    pub refresh_threads: u16,
 }
 
 pub mod app {
@@ -87,6 +93,13 @@ pub mod app {
 pub fn load_repo() -> Result<repo::Config, Error> {
     let flat_config = envy::prefixed("REPO__").from_env::<FlatRepoConfig>()?;
 
+    if flat_config.refresh_threads as u32 >= flat_config.max_pool_size {
+        return Err(Error::ConfigValidationError(format!(
+            "Value of REFRESH_THREADS ({}) must be less that value of MAX_POOL_SIZE ({})",
+            flat_config.refresh_threads, flat_config.max_pool_size
+        )));
+    }
+
     Ok(repo::Config {
         host: flat_config.host,
         port: flat_config.port,
@@ -94,6 +107,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
         password: flat_config.password,
         key_ttl: Duration::from_secs(flat_config.key_ttl),
         max_pool_size: flat_config.max_pool_size,
+        refresh_threads: flat_config.refresh_threads,
     })
 }
 

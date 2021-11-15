@@ -46,7 +46,11 @@ async fn tokio_main() -> Result<(), Error> {
         .max_size(repo_config.max_pool_size)
         .build(manager)
         .await?;
-    let repo = Arc::new(RepoImpl::new(pool.clone(), repo_config.key_ttl));
+    let repo = Arc::new(RepoImpl::new(
+        pool.clone(),
+        repo_config.key_ttl,
+        repo_config.refresh_threads as usize,
+    ));
 
     let keys_refresher = KeysRefresher::new(repo.clone(), repo_config.key_ttl, topics.clone());
     let keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });

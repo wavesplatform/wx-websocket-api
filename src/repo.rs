@@ -2,6 +2,7 @@ use crate::client::ClientId;
 use crate::error::Error;
 use async_trait::async_trait;
 use bb8_redis::{bb8, redis::AsyncCommands, RedisConnectionManager};
+use futures::future;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use wavesexchange_log::{debug, timer};
@@ -18,6 +19,7 @@ pub struct Config {
     pub password: String,
     pub key_ttl: Duration,
     pub max_pool_size: u32,
+    pub refresh_threads: u16,
 }
 
 #[async_trait]
@@ -36,14 +38,20 @@ pub trait Repo: Send + Sync {
 pub struct RepoImpl {
     pool: bb8::Pool<RedisConnectionManager>,
     key_ttl: Duration,
+    refresh_threads: usize,
     state_version: VersionCounter,
 }
 
 impl RepoImpl {
-    pub fn new(pool: bb8::Pool<RedisConnectionManager>, key_ttl: Duration) -> RepoImpl {
+    pub fn new(
+        pool: bb8::Pool<RedisConnectionManager>,
+        key_ttl: Duration,
+        refresh_threads: usize,
+    ) -> RepoImpl {
         RepoImpl {
             pool,
             key_ttl,
+            refresh_threads,
             state_version: Default::default(),
         }
     }
@@ -83,19 +91,53 @@ impl Repo for RepoImpl {
         }
     }
 
-    async fn refresh(&self, topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error> {
+    async fn refresh(&self, mut topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error> {
         timer!("Refresh: update TTLs in Redis", level = debug, verbose);
         debug!("Refresh: updating TTLs of {} keys in Redis", topics.len());
-        let mut con = self.pool.get().await?;
         let key_ttl = self.key_ttl.as_secs() as usize;
-        let mut result = HashMap::new();
-        for topic in topics {
-            let key = "sub:".to_string() + &String::from(topic.clone());
-            let update_time = Instant::now();
-            con.expire(key, key_ttl).await?;
-            result.insert(topic, update_time);
+        let mut tasks = Vec::with_capacity(self.refresh_threads);
+        let n = topics.len() / self.refresh_threads;
+        for i in 1.. {
+            let remainder = if topics.len() > n {
+                topics.split_off(topics.len() - n)
+            } else {
+                Vec::new()
+            };
+
+            let pool = self.pool.clone();
+            let h = tokio::task::spawn(async move {
+                let mut con = pool.get().await?;
+                let mut result = HashMap::new();
+                for topic in topics {
+                    let key = "sub:".to_string() + &String::from(topic.clone());
+                    let update_time = Instant::now();
+                    con.expire(key, key_ttl).await?;
+                    result.insert(topic, update_time);
+                }
+                debug!("Refresh: batch #{} ({} keys) completed", i, result.len());
+                Result::<_, Error>::Ok(result)
+            });
+            tasks.push(h);
+
+            if remainder.is_empty() {
+                break;
+            }
+            topics = remainder;
         }
-        Ok(result)
+        let results = future::join_all(tasks).await;
+        results
+            .into_iter()
+            .map(|r| r.expect("task failed to execute"))
+            .fold(Ok(HashMap::new()), |res, batch| match res {
+                Ok(mut res) => match batch {
+                    Ok(batch) => {
+                        res.extend(batch.into_iter());
+                        Ok(res)
+                    }
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            })
     }
 }
 
