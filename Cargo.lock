@@ -1502,8 +1502,8 @@ checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 
 [[package]]
 name = "wavesexchange_log"
-version = "0.4.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.4.0#948124c8d1faaa28f8f958420638a446b2fe1c96"
+version = "0.5.0"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.5.0#f23ce00338fa8ce320f9627e1dc099bcc5244ddc"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1516,8 +1516,8 @@ dependencies = [
 
 [[package]]
 name = "wavesexchange_log"
-version = "0.4.0"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.1#1d56ef0663f9d2ca5582b384d622211da7803fdb"
+version = "0.5.0"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.2#f23ce00338fa8ce320f9627e1dc099bcc5244ddc"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1542,8 +1542,8 @@ dependencies = [
 
 [[package]]
 name = "wavesexchange_warp"
-version = "0.12.1"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.1#1d56ef0663f9d2ca5582b384d622211da7803fdb"
+version = "0.12.2"
+source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.2#f23ce00338fa8ce320f9627e1dc099bcc5244ddc"
 dependencies = [
  "futures",
  "once_cell",
@@ -1551,7 +1551,7 @@ dependencies = [
  "serde_json",
  "serde_qs",
  "warp",
- "wavesexchange_log 0.4.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.1)",
+ "wavesexchange_log 0.5.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.2)",
 ]
 
 [[package]]
@@ -1575,7 +1575,7 @@ dependencies = [
  "tokio",
  "url",
  "warp",
- "wavesexchange_log 0.4.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.4.0)",
+ "wavesexchange_log 0.5.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.5.0)",
  "wavesexchange_topic",
  "wavesexchange_warp",
 ]
