@@ -17,6 +17,7 @@ pub struct Config {
     pub username: String,
     pub password: String,
     pub key_ttl: Duration,
+    pub max_pool_size: u32,
 }
 
 #[async_trait]

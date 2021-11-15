@@ -24,6 +24,10 @@ fn default_key_ttl() -> u64 {
     60
 }
 
+fn default_max_pool_size() -> u32 {
+    10
+}
+
 #[derive(Deserialize)]
 struct FlatServerConfig {
     #[serde(default = "default_port")]
@@ -43,6 +47,8 @@ struct FlatRepoConfig {
     pub password: String,
     #[serde(default = "default_key_ttl")]
     pub key_ttl: u64,
+    #[serde(default = "default_max_pool_size")]
+    pub max_pool_size: u32,
 }
 
 pub mod app {
@@ -87,6 +93,7 @@ pub fn load_repo() -> Result<repo::Config, Error> {
         username: flat_config.username,
         password: flat_config.password,
         key_ttl: Duration::from_secs(flat_config.key_ttl),
+        max_pool_size: flat_config.max_pool_size,
     })
 }
 
