@@ -448,7 +448,19 @@ impl ClientIdsByTopics {
         );
         self.0
             .entry(topic)
-            .or_insert_with(KeyInfo::new)
+            .and_modify(|key_info| {
+                debug!(
+                    "Found existing key_info `{:?}` (Client#{}, subscription_key={:?})",
+                    key_info, client_id, subscription_key
+                );
+            })
+            .or_insert_with(|| {
+                debug!(
+                    "Created new key_info (Client#{}, subscription_key={:?})",
+                    client_id, subscription_key
+                );
+                KeyInfo::new()
+            })
             .clients
             .insert(client_id, subscription_key);
     }
@@ -461,7 +473,16 @@ impl ClientIdsByTopics {
             );
             key_info.clients.remove(client_id);
             if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                debug!(
+                    "Removing key_info for topic {:?} (due to Client#{}): {:?}",
+                    topic, client_id, key_info
+                );
                 self.0.remove(topic);
+            } else {
+                debug!(
+                    "Keeping key_info for topic {:?} (due to Client#{}): {:?}",
+                    topic, client_id, key_info
+                );
             }
         }
     }
@@ -474,7 +495,16 @@ impl ClientIdsByTopics {
         let key_info = self
             .0
             .entry(multitopic.clone())
-            .or_insert_with(KeyInfo::new);
+            .and_modify(|key_info| {
+                debug!(
+                    "Found existing key_info `{:?}` for multitopic {:?}",
+                    key_info, multitopic
+                );
+            })
+            .or_insert_with(|| {
+                debug!("Created new key_info for multitopic {:?}", multitopic);
+                KeyInfo::new()
+            });
 
         debug!(
             "Updating multitopic {:?}: subtopics {:?}, current key_info {:?}",
@@ -514,8 +544,12 @@ impl ClientIdsByTopics {
                 client_id, topic
             );
             self.0
-                .entry(topic)
-                .or_insert_with(KeyInfo::new)
+                .entry(topic.clone())
+                .and_modify(|_| debug!("Found existing key_info for subtopic {:?}", topic))
+                .or_insert_with(|| {
+                    debug!("Created new key_info for subtopic {:?}", topic);
+                    KeyInfo::new()
+                })
                 .indirect_clients
                 .entry(client_id.clone())
                 .or_insert_with(HashSet::new)
@@ -535,7 +569,16 @@ impl ClientIdsByTopics {
                     }
                 }
                 if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                    debug!(
+                        "Removing key_info for subtopic {:?} (due to Client#{}): {:?}",
+                        topic, client_id, key_info
+                    );
                     self.0.remove(&topic);
+                } else {
+                    debug!(
+                        "Keeping key_info for subtopic {:?} (due to Client#{}): {:?}",
+                        topic, client_id, key_info
+                    );
                 }
             }
         }
@@ -565,7 +608,16 @@ impl ClientIdsByTopics {
                         }
                     }
                     if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                        debug!(
+                            "Removing2 key_info for subtopic {:?} (due to Client#{}): {:?}",
+                            topic, client_id, key_info
+                        );
                         self.0.remove(topic);
+                    } else {
+                        debug!(
+                            "Keeping2 key_info for subtopic {:?} (due to Client#{}): {:?}",
+                            topic, client_id, key_info
+                        );
                     }
                 }
             }
