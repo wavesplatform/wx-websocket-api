@@ -18,6 +18,7 @@ pub struct ClientSubscriptionKey(pub String);
 
 #[derive(Debug)]
 pub struct Client {
+    client_id: ClientId,
     sender: ClientSender,
     subscriptions: HashMap<Topic, ClientSubscriptionData>,
     request_id: Option<String>,
@@ -90,10 +91,12 @@ fn leasing_balance_diff(old_value: &LeasingBalance, new_value: &LeasingBalance) 
 
 impl Client {
     pub fn new(
+        client_id: ClientId,
         sender: tokio::sync::mpsc::UnboundedSender<Message>,
         request_id: Option<String>,
     ) -> Self {
         Client {
+            client_id,
             sender: ClientSender {
                 sender,
                 message_counter: 1,
@@ -118,8 +121,8 @@ impl Client {
         client_subscription_key: ClientSubscriptionKey,
     ) {
         debug!(
-            "[Client] directly subscribed to {:?}\n\tSubscription key: {:?}",
-            topic, client_subscription_key
+            "[Client] Client#{} directly subscribed to {:?}\n\tSubscription key: {:?}",
+            self.client_id, topic, client_subscription_key
         );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.subscription_key = client_subscription_key;
@@ -133,8 +136,8 @@ impl Client {
         client_subscription_key: ClientSubscriptionKey,
     ) {
         debug!(
-            "[Client] indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
-            topic, parent_multitopic, client_subscription_key
+            "[Client] Client#{} indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
+            self.client_id, topic, parent_multitopic, client_subscription_key
         );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.indirect_subscription_sources.insert(
@@ -156,7 +159,10 @@ impl Client {
     }
 
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
-        debug!("[Client] directly unsubscribed from {:?}", topic);
+        debug!(
+            "[Client] Client#{} directly unsubscribed from {:?}",
+            self.client_id, topic
+        );
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             subscription_data.is_direct = false;
             let still_subscribed = subscription_data.is_direct || subscription_data.is_indirect;
@@ -169,8 +175,8 @@ impl Client {
     pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             debug!(
-                "[Client] indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
-                topic, parent_multitopic
+                "[Client] Client#{} indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
+                self.client_id, topic, parent_multitopic
             );
             subscription_data
                 .indirect_subscription_sources
@@ -442,7 +448,19 @@ impl ClientIdsByTopics {
         );
         self.0
             .entry(topic)
-            .or_insert_with(KeyInfo::new)
+            .and_modify(|key_info| {
+                debug!(
+                    "Found existing key_info `{:?}` (Client#{}, subscription_key={:?})",
+                    key_info, client_id, subscription_key
+                );
+            })
+            .or_insert_with(|| {
+                debug!(
+                    "Created new key_info (Client#{}, subscription_key={:?})",
+                    client_id, subscription_key
+                );
+                KeyInfo::new()
+            })
             .clients
             .insert(client_id, subscription_key);
     }
@@ -455,7 +473,16 @@ impl ClientIdsByTopics {
             );
             key_info.clients.remove(client_id);
             if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                debug!(
+                    "Removing key_info for topic {:?} (due to Client#{}): {:?}",
+                    topic, client_id, key_info
+                );
                 self.0.remove(topic);
+            } else {
+                debug!(
+                    "Keeping key_info for topic {:?} (due to Client#{}): {:?}",
+                    topic, client_id, key_info
+                );
             }
         }
     }
@@ -465,7 +492,24 @@ impl ClientIdsByTopics {
         multitopic: Topic,
         subtopics: HashSet<Topic>,
     ) -> MultitopicUpdate {
-        let key_info = self.0.entry(multitopic).or_insert_with(KeyInfo::new);
+        let key_info = self
+            .0
+            .entry(multitopic.clone())
+            .and_modify(|key_info| {
+                debug!(
+                    "Found existing key_info `{:?}` for multitopic {:?}",
+                    key_info, multitopic
+                );
+            })
+            .or_insert_with(|| {
+                debug!("Created new key_info for multitopic {:?}", multitopic);
+                KeyInfo::new()
+            });
+
+        debug!(
+            "Updating multitopic {:?}: subtopics {:?}, current key_info {:?}",
+            multitopic, subtopics, key_info
+        );
 
         let added_subtopics = subtopics
             .difference(&key_info.subtopics)
@@ -500,8 +544,12 @@ impl ClientIdsByTopics {
                 client_id, topic
             );
             self.0
-                .entry(topic)
-                .or_insert_with(KeyInfo::new)
+                .entry(topic.clone())
+                .and_modify(|_| debug!("Found existing key_info for subtopic {:?}", topic))
+                .or_insert_with(|| {
+                    debug!("Created new key_info for subtopic {:?}", topic);
+                    KeyInfo::new()
+                })
                 .indirect_clients
                 .entry(client_id.clone())
                 .or_insert_with(HashSet::new)
@@ -521,7 +569,16 @@ impl ClientIdsByTopics {
                     }
                 }
                 if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                    debug!(
+                        "Removing key_info for subtopic {:?} (due to Client#{}): {:?}",
+                        topic, client_id, key_info
+                    );
                     self.0.remove(&topic);
+                } else {
+                    debug!(
+                        "Keeping key_info for subtopic {:?} (due to Client#{}): {:?}",
+                        topic, client_id, key_info
+                    );
                 }
             }
         }
@@ -551,7 +608,16 @@ impl ClientIdsByTopics {
                         }
                     }
                     if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                        debug!(
+                            "Removing2 key_info for subtopic {:?} (due to Client#{}): {:?}",
+                            topic, client_id, key_info
+                        );
                         self.0.remove(topic);
+                    } else {
+                        debug!(
+                            "Keeping2 key_info for subtopic {:?} (due to Client#{}): {:?}",
+                            topic, client_id, key_info
+                        );
                     }
                 }
             }
@@ -597,64 +663,105 @@ impl ClientIdsByTopics {
     }
 }
 
-#[test]
-fn leasing_balance_diff_test() {
-    // changed both fields
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
-    // changed only out
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 8,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
-    // changed only in
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 5,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
-    let diff = leasing_balance_diff(&lb2, &lb1);
-    assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
-    // no changes
-    let lb1 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let lb2 = LeasingBalance {
-        address: "address".to_string(),
-        balance_in: 7,
-        balance_out: 2,
-    };
-    let diff = leasing_balance_diff(&lb1, &lb2);
-    assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, convert::TryFrom};
+    use wavesexchange_topic::Topic;
+
+    use super::ClientIdsByTopics;
+    use crate::client::{leasing_balance_diff, ClientSubscriptionKey, LeasingBalance};
+
+    #[test]
+    fn should_correctly_update_multitopic_info() -> anyhow::Result<()> {
+        let multitopic_subscription_key = "topic://state?address__in[]=3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV&key__match_any[]=%s%s%s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__*";
+        let multitopic = Topic::try_from(multitopic_subscription_key)?;
+
+        let subtopic_subscription_key = "topic://state/3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV/%25s%25s%25s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__7KZbJrVopwJhkdwbe1eFDBbex4dkY63MxjTNjqXtrzj1";
+        let subtopic = Topic::try_from(subtopic_subscription_key)?;
+
+        let mut target = ClientIdsByTopics::default();
+        let mut subtopics = HashSet::new();
+        subtopics.insert(subtopic.clone());
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+        assert_eq!(multitopic_update.added_subtopics, vec![subtopic.clone()]);
+
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+        assert_eq!(multitopic_update.added_subtopics, vec![]);
+
+        // Check whether adding subscriptions before update multitopic info is valid
+        let mut target = ClientIdsByTopics::default();
+
+        let subscribtion_key = ClientSubscriptionKey(multitopic_subscription_key.to_owned());
+        target.add_subscription(multitopic.clone(), 1, subscribtion_key);
+        let multitopic_update =
+            target.update_multitopic_info(multitopic.clone(), subtopics.clone());
+
+        assert_eq!(multitopic_update.added_subtopics, vec![subtopic]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn leasing_balance_diff_test() {
+        // changed both fields
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 5,
+            balance_out: 8,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":5,\"out\":8}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+        // changed only out
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 8,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"out\":8}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"out\":2}", &diff);
+        // changed only in
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 5,
+            balance_out: 2,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":5}", &diff);
+        let diff = leasing_balance_diff(&lb2, &lb1);
+        assert_eq!("{\"address\":\"address\",\"in\":7}", &diff);
+        // no changes
+        let lb1 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let lb2 = LeasingBalance {
+            address: "address".to_string(),
+            balance_in: 7,
+            balance_out: 2,
+        };
+        let diff = leasing_balance_diff(&lb1, &lb2);
+        assert_eq!("{\"address\":\"address\",\"in\":7,\"out\":2}", &diff);
+    }
 }

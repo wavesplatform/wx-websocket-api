@@ -1,6 +1,7 @@
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use wavesexchange_log::{debug, timer};
 
 use crate::client::Topics;
 use crate::error::Error;
@@ -25,6 +26,9 @@ impl<R: Repo> KeysRefresher<R> {
         let refresh_time = self.key_ttl / 4;
         loop {
             tokio::time::sleep(refresh_time).await;
+
+            timer!("Refresh loop iteration", level = debug);
+
             let topics_to_update = {
                 let mut topics_to_update = Vec::new();
                 let expiry_time = Instant::now() - self.key_ttl / 2;
@@ -38,6 +42,8 @@ impl<R: Repo> KeysRefresher<R> {
 
             if !topics_to_update.is_empty() {
                 let updated_topics = self.repo.refresh(topics_to_update).await?;
+                timer!("Refresh: store update timestamps", level = debug, verbose);
+                debug!("Refresh: storing {} timestamps", updated_topics.len());
                 stream::iter(updated_topics)
                     .for_each_concurrent(10, |(topic, update_time)| async move {
                         self.topics.write().await.refresh_topic(topic, update_time)

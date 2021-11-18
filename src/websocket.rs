@@ -51,6 +51,7 @@ pub async fn handle_connection<R: Repo>(
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let client = Arc::new(Mutex::new(Client::new(
+        client_id,
         client_tx.clone(),
         request_id.clone(),
     )));
@@ -213,7 +214,7 @@ async fn handle_income_message<R: Repo>(
                         topic: client_subscription_key,
                     } => {
                         debug!(
-                            "Handling Client{} subscription to key {:?}",
+                            "Handling Client#{} subscription to key {:?}",
                             client_id, client_subscription_key
                         );
 
@@ -238,16 +239,17 @@ async fn handle_income_message<R: Repo>(
                                 client_lock.add_direct_subscription(topic, key);
                             }
                             let value = repo.get_by_key(&subscription_key).await?;
-                            trace!("  Topic current value in Redis: {:?}", value);
+                            debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
                             let subtopics;
                             if let Some(value) = value {
                                 let send_value;
                                 if topic.is_multi_topic() {
                                     let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
-                                    trace!(
-                                        "  Subtopics ({}): {:?}",
+                                    debug!(
+                                        "Subtopics ({}): {:?}",
                                         subtopics_vec.len(),
-                                        subtopics_vec
+                                        subtopics_vec;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     subtopics = Some(HashSet::<Topic>::from_iter(
                                         subtopics_vec.iter().cloned(),
@@ -255,10 +257,11 @@ async fn handle_income_message<R: Repo>(
                                     let subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
-                                    trace!(
-                                        "  Subtopic values ({}): {:?}",
+                                    debug!(
+                                        "Subtopic values ({}): {:?}",
                                         subtopic_values.0.len(),
-                                        subtopic_values
+                                        subtopic_values;
+                                        "topic" => format!("{:?}", topic)
                                     );
                                     send_value = subtopic_values.as_json_string();
                                 } else {
@@ -279,6 +282,7 @@ async fn handle_income_message<R: Repo>(
                             let key = client_subscription_key.clone();
                             topics_lock.add_subscription(topic.clone(), *client_id, key);
                             if let Some(subtopics) = subtopics {
+                                debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
                                 let _ = topics_lock
                                     .update_multitopic_info(topic.clone(), subtopics.clone());
                                 for subtopic in subtopics.iter().cloned() {
@@ -474,11 +478,13 @@ pub async fn updates_handler<R: Repo>(
             if topic.is_multi_topic() {
                 match parse_subtopic_list::<HashSet<_>>(&value) {
                     Ok(subtopics) => {
+                        debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
                         let mut topics_lock = topics.write().await;
                         let multitopic_update = {
                             let topic = topic.clone();
                             topics_lock.update_multitopic_info(topic, subtopics)
                         };
+                        debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
                         if has_subscribed_clients {
                             for client_id in subscribed_clients.keys() {
                                 topics_lock.update_indirect_subscriptions(
@@ -497,42 +503,50 @@ pub async fn updates_handler<R: Repo>(
                             };
                             match subtopic_values.await {
                                 Ok(subtopic_values) => {
-                                    if !multitopic_update.is_empty() && subtopic_values.is_empty() {
-                                        debug!("Update ignored: has subtopics but values not available yet");
-                                        // Values of the new topics not yet available,
-                                        // so just ignore the update,
-                                        // it will be received later again as individual
-                                        // subtopic update anyway
-                                        Update::Ignore
-                                    } else {
-                                        debug!("Update accepted: either has subtopic values or multitopic is empty");
+                                    debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
+                                    let multitopic_is_empty = multitopic_update.is_empty(); //TODO maybe `subtopics.is_empty()`?
+                                    let subtopic_values_available = !subtopic_values.is_empty();
+                                    if multitopic_is_empty {
+                                        debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                    }
+                                    if subtopic_values_available {
+                                        debug!("Update accepted: subtopic values available"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                    }
+                                    if multitopic_is_empty || subtopic_values_available {
                                         Update::Multi {
                                             topic,
                                             value: subtopic_values.as_json_string(),
                                             multitopic_update,
                                         }
+                                    } else {
+                                        debug!("Update ignored: has subtopics but values not available yet"; "topic" => format!("{:?}", topic));
+                                        // Values of the new topics not yet available,
+                                        // so just ignore the update,
+                                        // it will be received later again as individual
+                                        // subtopic update anyway
+                                        Update::Ignore
                                     }
                                 }
                                 Err(err) => {
                                     error!(
                                         "failed to build update for multitopic {}; error = {}",
-                                        String::from(topic),
-                                        err
+                                        format!("{:?}", topic),
+                                        err; "topic" => format!("{:?}", topic)
                                     );
                                     Update::Ignore
                                 }
                             }
                         } else {
-                            debug!("there are not any clients to send update");
+                            debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
                             Update::Ignore
                         }
                     }
                     Err(err) => {
                         error!(
                             "multitopic {} has unrecognized value {}; error = {}",
-                            String::from(topic),
+                            format!("{:?}", topic),
                             value,
-                            err
+                            err; "topic" => format!("{:?}", topic)
                         );
                         Update::Ignore
                     }
@@ -541,7 +555,7 @@ pub async fn updates_handler<R: Repo>(
                 if has_subscribed_clients {
                     Update::Single { topic, value }
                 } else {
-                    debug!("there are not any clients to send update");
+                    debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
                     Update::Ignore
                 }
             }
