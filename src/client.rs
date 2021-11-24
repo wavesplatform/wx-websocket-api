@@ -429,11 +429,11 @@ pub struct MultitopicUpdate {
     pub removed_subtopics: Vec<Topic>,
 }
 
-impl MultitopicUpdate {
-    pub fn is_empty(&self) -> bool {
-        self.added_subtopics.is_empty() && self.removed_subtopics.is_empty()
-    }
-}
+// impl MultitopicUpdate {
+//     pub fn is_empty(&self) -> bool {
+//         self.added_subtopics.is_empty() && self.removed_subtopics.is_empty()
+//     }
+// }
 
 impl ClientIdsByTopics {
     pub fn add_subscription(
