@@ -244,7 +244,7 @@ impl Client {
             if subscription_data.is_indirect {
                 for sub in subscription_data.indirect_subscription_sources.values() {
                     let subscription_key = sub.subscription_key.clone();
-                    let value = value.clone();
+                    let value = serde_json::to_string(&[&value]).expect("val to array");
                     self.sender.send_update(subscription_key, value)?;
                 }
             }
