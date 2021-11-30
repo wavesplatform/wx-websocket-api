@@ -476,17 +476,18 @@ pub async fn updates_handler<R: Repo>(
         );
 
         let update = {
-            if topic.is_multi_topic() {
-                match parse_subtopic_list::<HashSet<_>>(&value) {
-                    Ok(subtopics) => {
-                        debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
-                        let mut topics_lock = topics.write().await;
-                        let multitopic_update = {
-                            let topic = topic.clone();
-                            topics_lock.update_multitopic_info(topic, subtopics)
-                        };
-                        debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
-                        if has_subscribed_clients {
+            if has_subscribed_clients {
+                if topic.is_multi_topic() {
+                    match parse_subtopic_list::<HashSet<_>>(&value) {
+                        Ok(subtopics) => {
+                            let multitopic_is_empty = subtopics.is_empty();
+                            debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
+                            let mut topics_lock = topics.write().await;
+                            let multitopic_update = {
+                                let topic = topic.clone();
+                                topics_lock.update_multitopic_info(topic, subtopics)
+                            };
+                            debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
                             for client_id in subscribed_clients.keys() {
                                 topics_lock.update_indirect_subscriptions(
                                     topic.clone(),
@@ -506,7 +507,6 @@ pub async fn updates_handler<R: Repo>(
                                 Ok(mut subtopic_values) => {
                                     debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
                                     subtopic_values.filter_raw_null();
-                                    let multitopic_is_empty = multitopic_update.is_empty(); //TODO maybe `subtopics.is_empty()`?
                                     let subtopic_values_available = !subtopic_values.is_empty();
                                     if multitopic_is_empty {
                                         debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
@@ -538,28 +538,23 @@ pub async fn updates_handler<R: Repo>(
                                     Update::Ignore
                                 }
                             }
-                        } else {
-                            debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
+                        }
+                        Err(err) => {
+                            error!(
+                                "multitopic {} has unrecognized value {}; error = {}",
+                                format!("{:?}", topic),
+                                value,
+                                err; "topic" => format!("{:?}", topic)
+                            );
                             Update::Ignore
                         }
                     }
-                    Err(err) => {
-                        error!(
-                            "multitopic {} has unrecognized value {}; error = {}",
-                            format!("{:?}", topic),
-                            value,
-                            err; "topic" => format!("{:?}", topic)
-                        );
-                        Update::Ignore
-                    }
+                } else {
+                    Update::Single { topic, value }
                 }
             } else {
-                if has_subscribed_clients {
-                    Update::Single { topic, value }
-                } else {
-                    debug!("there are not any clients to send update"; "topic" => format!("{:?}", topic));
-                    Update::Ignore
-                }
+                debug!("there are no clients to send update to"; "topic" => format!("{:?}", topic));
+                Update::Ignore
             }
         };
 
