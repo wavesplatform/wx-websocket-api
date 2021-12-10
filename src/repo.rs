@@ -26,7 +26,9 @@ pub struct Config {
 pub trait Repo: Send + Sync {
     async fn get_connection_id(&self) -> Result<ClientId, Error>;
 
-    async fn subscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error>;
+    async fn subscribe<S>(&self, key: S, context: String) -> Result<(), Error>
+    where
+        S: Into<String> + Send + Sync;
 
     async fn get_by_key(&self, key: &str) -> Result<Option<String>, Error>;
 
@@ -65,12 +67,16 @@ impl Repo for RepoImpl {
         return Ok(next_user_id);
     }
 
-    async fn subscribe<S: Into<String> + Send + Sync>(&self, key: S) -> Result<(), Error> {
+    async fn subscribe<S>(&self, key: S, context: String) -> Result<(), Error>
+    where
+        S: Into<String> + Send + Sync,
+    {
         let key = "sub:".to_string() + &key.into();
         let mut con = self.pool.get().await?;
         let key_ttl = self.key_ttl.as_secs() as usize;
         let state_version = self.state_version.next();
-        con.set_ex(key, state_version, key_ttl).await?;
+        let value = format!("{}:{}", state_version, context);
+        con.set_ex(key, value, key_ttl).await?;
 
         Ok(())
     }

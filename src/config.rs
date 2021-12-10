@@ -120,3 +120,40 @@ pub fn load_server() -> Result<server::ServerConfig, Error> {
         client_ping_failures_threshold: flat_config.client_ping_failures_threshold,
     })
 }
+
+pub mod tracing {
+    use crate::error::Error;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct FlatTracingConfig {
+        service_name_prefix: Option<String>,
+        jaeger_agent_endpoint: Option<String>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct TracingConfig {
+        pub service_name_prefix: String,
+        pub jaeger_agent_endpoint: String,
+    }
+
+    impl From<FlatTracingConfig> for Option<TracingConfig> {
+        fn from(flat: FlatTracingConfig) -> Self {
+            if let (Some(service_name_prefix), Some(jaeger_agent_endpoint)) =
+                (flat.service_name_prefix, flat.jaeger_agent_endpoint)
+            {
+                Some(TracingConfig {
+                    service_name_prefix,
+                    jaeger_agent_endpoint,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn load() -> Result<Option<TracingConfig>, Error> {
+        let flat_config = envy::prefixed("TRACING__").from_env::<FlatTracingConfig>()?;
+        Ok(flat_config.into())
+    }
+}

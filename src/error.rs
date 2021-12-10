@@ -6,6 +6,12 @@ pub enum Error {
     ConfigLoadError(#[from] envy::Error),
     #[error("ConfigValidationError: {0}")]
     ConfigValidationError(String),
+    #[error("OpenTelemetryTraceError: {0}")]
+    OpenTelemetryTraceError(#[from] opentelemetry::trace::TraceError),
+    #[error("TracingSubscriberTryInitError: {0}")]
+    TracingSubscriberTryInitError(#[from] tracing_subscriber::util::TryInitError),
+    #[error("TracingSubscriberFilterParseError: {0}")]
+    TracingSubscriberFilterParseError(#[from] tracing_subscriber::filter::ParseError),
     #[error("JoinError: {0}")]
     JoinError(#[from] tokio::task::JoinError),
     #[error("WarpError: {0}")]

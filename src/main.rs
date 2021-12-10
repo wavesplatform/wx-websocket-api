@@ -17,7 +17,11 @@ use refresher::KeysRefresher;
 use repo::RepoImpl;
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
-use wavesexchange_log::{debug, error};
+use wavesexchange_log::{debug, error, info};
+
+// Tracing
+use opentelemetry::global;
+use tracing_subscriber::prelude::*;
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -30,6 +34,40 @@ async fn tokio_main() -> Result<(), Error> {
     let app_config = config::app::load()?;
     let repo_config = config::load_repo()?;
     let server_config = config::load_server()?;
+    let tracing_config = config::tracing::load()?;
+
+    let opentelemetry_initialized;
+    if let Some(tracing_config) = tracing_config {
+        info!(
+            "OpenTelemetry enabled: {}, {}",
+            tracing_config.service_name_prefix, tracing_config.jaeger_agent_endpoint,
+        );
+        global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
+
+        let tracer = opentelemetry_jaeger::new_pipeline()
+            .with_service_name(format!(
+                "{}/wx-websocket-api",
+                tracing_config.service_name_prefix
+            ))
+            .with_agent_endpoint(tracing_config.jaeger_agent_endpoint)
+            .install_batch(opentelemetry::runtime::Tokio)?;
+
+        let opentelemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+        let fmt_layer = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .finish();
+
+        fmt_layer.with(opentelemetry).try_init()?;
+
+        opentelemetry_initialized = true;
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .finish()
+            .try_init()?;
+
+        opentelemetry_initialized = false;
+    }
 
     metrics::register_metrics();
 
@@ -118,5 +156,10 @@ async fn tokio_main() -> Result<(), Error> {
 
     let _ = server_stop_tx.send(());
     server_handle.await?;
+
+    if opentelemetry_initialized {
+        global::shutdown_tracer_provider();
+    }
+
     Ok(())
 }

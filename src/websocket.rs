@@ -5,6 +5,7 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tracing_futures::Instrument;
 use warp::ws;
 use wavesexchange_log::{debug, error, info, trace};
 use wavesexchange_topic::{State, StateSingle, Topic};
@@ -46,6 +47,48 @@ pub async fn handle_connection<R: Repo>(
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await?;
 
+    CLIENTS.inc();
+
+    let connect_span = tracing::info_span!("client_connected", client_id);
+    let connect_span_id = connect_span.id();
+
+    let disconnect_span = tracing::info_span!("client_disconnected", client_id);
+    disconnect_span.follows_from(connect_span_id.clone());
+
+    let client = on_connect(
+        client_id,
+        &mut socket,
+        clients.clone(),
+        topics.clone(),
+        repo,
+        options,
+        request_id,
+        shutdown_signal,
+        connect_span_id,
+    )
+    .instrument(connect_span)
+    .await;
+
+    on_disconnect(socket, client, client_id, clients, topics)
+        .instrument(disconnect_span)
+        .await;
+
+    CLIENTS.dec();
+
+    Ok(())
+}
+
+async fn on_connect<R: Repo>(
+    client_id: ClientId,
+    socket: &mut ws::WebSocket,
+    clients: Arc<Sharded<Clients>>,
+    topics: Arc<Topics>,
+    repo: Arc<R>,
+    options: HandleConnectionOptions,
+    request_id: Option<String>,
+    shutdown_signal: tokio::sync::mpsc::Sender<()>,
+    span_id: Option<tracing::Id>,
+) -> Arc<Mutex<Client>> {
     info!("Client#{} connected", client_id);
 
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -56,8 +99,6 @@ pub async fn handle_connection<R: Repo>(
         request_id.clone(),
     )));
 
-    CLIENTS.inc();
-
     clients
         .get(&client_id)
         .write()
@@ -66,14 +107,7 @@ pub async fn handle_connection<R: Repo>(
 
     // ws connection messages processing
     let run_handler = run(
-        &mut socket,
-        &client,
-        &client_id,
-        request_id,
-        &topics,
-        repo,
-        options,
-        client_rx,
+        socket, &client, &client_id, request_id, &topics, repo, options, client_rx, span_id,
     );
 
     tokio::select! {
@@ -83,12 +117,7 @@ pub async fn handle_connection<R: Repo>(
         }
     }
 
-    // handle connection close
-    on_disconnect(socket, client, client_id, clients, topics).await;
-
-    CLIENTS.dec();
-
-    Ok(())
+    client
 }
 
 async fn run<R: Repo>(
@@ -100,6 +129,7 @@ async fn run<R: Repo>(
     repo: Arc<R>,
     options: HandleConnectionOptions,
     mut client_rx: tokio::sync::mpsc::UnboundedReceiver<ws::Message>,
+    span_id: Option<tracing::Id>,
 ) {
     let mut interval = tokio::time::interval(options.ping_interval);
     loop {
@@ -124,7 +154,7 @@ async fn run<R: Repo>(
                         continue
                     }
 
-                    if match handle_income_message(&repo, client, client_id, topics, &msg).await {
+                    if match handle_income_message(&repo, client, client_id, topics, &msg, span_id.clone()).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client, client_id).await,
                         Err(Error::InvalidTopic(error)) => {
                             let error = format!("Invalid topic: {:?} – {}", msg, error);
@@ -200,6 +230,7 @@ async fn handle_income_message<R: Repo>(
     client_id: &ClientId,
     topics: &Arc<Topics>,
     raw_msg: &ws::Message,
+    parent_span_id: Option<tracing::Id>,
 ) -> Result<(), Error> {
     let msg = IncomeMessage::try_from(raw_msg)?;
 
@@ -232,75 +263,95 @@ async fn handle_income_message<R: Repo>(
                                 None,
                             )?;
                         } else {
-                            let mut topics_lock = topics.write().await;
-                            {
-                                let topic = topic.clone();
-                                let key = client_subscription_key.clone();
-                                client_lock.add_direct_subscription(topic, key);
-                            }
-                            let value = repo.get_by_key(&subscription_key).await?;
-                            debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
-                            let subtopics;
-                            if let Some(value) = value {
-                                let send_value;
-                                if topic.is_multi_topic() {
-                                    let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
+                            let (span, context) = {
+                                use opentelemetry::global;
+                                use std::collections::HashMap;
+                                use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+                                let span = tracing::debug_span!("subscribe", %subscription_key, ?client_id);
+                                span.follows_from(parent_span_id);
+                                let span_context = span.context();
+                                let mut hash_map = HashMap::<String, String>::new();
+                                global::get_text_map_propagator(|propagator| {
+                                    propagator.inject_context(&span_context, &mut hash_map)
+                                });
+                                let context_json = serde_json::to_string(&hash_map).unwrap();
+                                (span, context_json)
+                            };
+                            async {
+                                let mut topics_lock = topics.write().await;
+                                {
+                                    let topic = topic.clone();
+                                    let key = client_subscription_key.clone();
+                                    client_lock.add_direct_subscription(topic, key);
+                                }
+                                let value = repo.get_by_key(&subscription_key).await?;
+                                debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
+                                let subtopics;
+                                if let Some(value) = value {
+                                    let send_value;
+                                    if topic.is_multi_topic() {
+                                        let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
+                                        debug!(
+                                            "Subtopics ({}): {:?}",
+                                            subtopics_vec.len(),
+                                            subtopics_vec;
+                                            "topic" => format!("{:?}", topic)
+                                        );
+                                        subtopics = Some(HashSet::<Topic>::from_iter(
+                                            subtopics_vec.iter().cloned(),
+                                        ));
+                                        let mut subtopic_values =
+                                            fetch_subtopic_values(repo, subtopics_vec, Vec::new())
+                                                .await?;
+                                        debug!(
+                                            "Subtopic values ({}): {:?}",
+                                            subtopic_values.0.len(),
+                                            subtopic_values;
+                                            "topic" => format!("{:?}", topic)
+                                        );
+                                        subtopic_values.filter_raw_null();
+                                        send_value = subtopic_values.as_json_string();
+                                    } else {
+                                        send_value = value;
+                                        subtopics = None;
+                                    }
+                                    client_lock.send_subscribed(&topic, send_value)?;
+                                    let latency = latency_timer.stop_and_record();
                                     debug!(
-                                        "Subtopics ({}): {:?}",
-                                        subtopics_vec.len(),
-                                        subtopics_vec;
-                                        "topic" => format!("{:?}", topic)
+                                        "Latency {}ms (immediate send), topic {:?}",
+                                        latency * 1_000_f64,
+                                        topic
                                     );
-                                    subtopics = Some(HashSet::<Topic>::from_iter(
-                                        subtopics_vec.iter().cloned(),
-                                    ));
-                                    let mut subtopic_values =
-                                        fetch_subtopic_values(repo, subtopics_vec, Vec::new())
-                                            .await?;
-                                    debug!(
-                                        "Subtopic values ({}): {:?}",
-                                        subtopic_values.0.len(),
-                                        subtopic_values;
-                                        "topic" => format!("{:?}", topic)
-                                    );
-                                    subtopic_values.filter_raw_null();
-                                    send_value = subtopic_values.as_json_string();
                                 } else {
-                                    send_value = value;
                                     subtopics = None;
+                                    client_lock
+                                        .mark_subscription_as_new(topic.clone(), latency_timer);
                                 }
-                                client_lock.send_subscribed(&topic, send_value)?;
-                                let latency = latency_timer.stop_and_record();
-                                debug!(
-                                    "Latency {}ms (immediate send), topic {:?}",
-                                    latency * 1_000_f64,
-                                    topic
-                                );
-                            } else {
-                                subtopics = None;
-                                client_lock.mark_subscription_as_new(topic.clone(), latency_timer);
-                            }
-                            let key = client_subscription_key.clone();
-                            topics_lock.add_subscription(topic.clone(), *client_id, key);
-                            if let Some(subtopics) = subtopics {
-                                debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
-                                let _ = topics_lock
-                                    .update_multitopic_info(topic.clone(), subtopics.clone());
-                                for subtopic in subtopics.iter().cloned() {
-                                    trace!("    Subtopic: {:?}", subtopic);
-                                    client_lock.add_indirect_subscription(
-                                        subtopic,
-                                        topic.clone(),
-                                        client_subscription_key.clone(),
-                                    );
+                                let key = client_subscription_key.clone();
+                                topics_lock.add_subscription(topic.clone(), *client_id, key);
+                                if let Some(subtopics) = subtopics {
+                                    debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
+                                    let _ = topics_lock
+                                        .update_multitopic_info(topic.clone(), subtopics.clone());
+                                    for subtopic in subtopics.iter().cloned() {
+                                        trace!("    Subtopic: {:?}", subtopic);
+                                        client_lock.add_indirect_subscription(
+                                            subtopic,
+                                            topic.clone(),
+                                            client_subscription_key.clone(),
+                                        );
+                                    }
+                                    let update = MultitopicUpdate {
+                                        added_subtopics: subtopics.iter().cloned().collect(),
+                                        removed_subtopics: vec![],
+                                    };
+                                    topics_lock
+                                        .update_indirect_subscriptions(topic, update, client_id);
                                 }
-                                let update = MultitopicUpdate {
-                                    added_subtopics: subtopics.iter().cloned().collect(),
-                                    removed_subtopics: vec![],
-                                };
-                                topics_lock.update_indirect_subscriptions(topic, update, client_id);
-                            }
-                            repo.subscribe(subscription_key.clone()).await?;
+                                repo.subscribe(subscription_key.clone(), context).await?;
+                                Result::<(), Error>::Ok(())
+                            }.instrument(span).await?;
                         }
                     }
                     IncomeMessage::Unsubscribe {
