@@ -5,6 +5,7 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tracing::{Id as SpanId, Span};
 use tracing_futures::Instrument;
 use warp::ws;
 use wavesexchange_log::{debug, error, info, trace};
@@ -263,21 +264,8 @@ async fn handle_income_message<R: Repo>(
                                 None,
                             )?;
                         } else {
-                            let (span, context) = {
-                                use opentelemetry::global;
-                                use std::collections::HashMap;
-                                use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-                                let span = tracing::debug_span!("subscribe", %subscription_key, ?client_id);
-                                span.follows_from(parent_span_id);
-                                let span_context = span.context();
-                                let mut hash_map = HashMap::<String, String>::new();
-                                global::get_text_map_propagator(|propagator| {
-                                    propagator.inject_context(&span_context, &mut hash_map)
-                                });
-                                let context_json = serde_json::to_string(&hash_map).unwrap();
-                                (span, context_json)
-                            };
+                            let (span, context) =
+                                telemetry_span(client_id, parent_span_id, &subscription_key);
                             async {
                                 let mut topics_lock = topics.write().await;
                                 {
@@ -391,6 +379,26 @@ async fn handle_income_message<R: Repo>(
     }
 
     Ok(())
+}
+
+fn telemetry_span(
+    client_id: &ClientId,
+    parent_span_id: Option<SpanId>,
+    subscription_key: &str,
+) -> (Span, String) {
+    use opentelemetry::global;
+    use std::collections::HashMap;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let span = tracing::debug_span!("subscribe", %subscription_key, ?client_id);
+    span.follows_from(parent_span_id);
+    let span_context = span.context();
+    let mut hash_map = HashMap::<String, String>::new();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&span_context, &mut hash_map)
+    });
+    let context_json = serde_json::to_string(&hash_map).unwrap();
+    (span, context_json)
 }
 
 async fn send_error(
