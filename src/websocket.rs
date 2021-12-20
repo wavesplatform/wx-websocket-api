@@ -50,11 +50,8 @@ pub async fn handle_connection<R: Repo>(
 
     CLIENTS.inc();
 
-    let connect_span = tracing::info_span!("client_connected", client_id);
+    let connect_span = tracing::info_span!("client_connection_active", client_id);
     let connect_span_id = connect_span.id();
-
-    let disconnect_span = tracing::info_span!("client_disconnected", client_id);
-    disconnect_span.follows_from(connect_span_id.clone());
 
     let client = on_connect(
         client_id,
@@ -65,10 +62,13 @@ pub async fn handle_connection<R: Repo>(
         options,
         request_id,
         shutdown_signal,
-        connect_span_id,
+        connect_span_id.clone(),
     )
     .instrument(connect_span)
     .await;
+
+    let disconnect_span = tracing::info_span!("client_disconnected", client_id);
+    disconnect_span.follows_from(connect_span_id);
 
     on_disconnect(socket, client, client_id, clients, topics)
         .instrument(disconnect_span)
@@ -91,6 +91,7 @@ async fn on_connect<R: Repo>(
     span_id: Option<tracing::Id>,
 ) -> Arc<Mutex<Client>> {
     info!("Client#{} connected", client_id);
+    tracing::event!(tracing::Level::INFO, client_id, "Client connected");
 
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -249,6 +250,12 @@ async fn handle_income_message<R: Repo>(
                             "Handling Client#{} subscription to key {:?}",
                             client_id, client_subscription_key
                         );
+                        tracing::event!(
+                            tracing::Level::DEBUG,
+                            client_id,
+                            ?client_subscription_key,
+                            "Subscribe"
+                        );
 
                         let latency_timer = SUBSCRIBED_MESSAGE_LATENCIES.start_timer();
 
@@ -311,10 +318,23 @@ async fn handle_income_message<R: Repo>(
                                         latency * 1_000_f64,
                                         topic
                                     );
+                                    tracing::event!(
+                                        tracing::Level::DEBUG,
+                                        client_id,
+                                        ?topic,
+                                        latency,
+                                        "Initial value sent (immediate)"
+                                    );
                                 } else {
                                     subtopics = None;
                                     client_lock
                                         .mark_subscription_as_new(topic.clone(), latency_timer);
+                                    tracing::event!(
+                                        tracing::Level::DEBUG,
+                                        client_id,
+                                        ?topic,
+                                        "Waiting for initial value"
+                                    );
                                 }
                                 let key = client_subscription_key.clone();
                                 topics_lock.add_subscription(topic.clone(), *client_id, key);
@@ -345,6 +365,12 @@ async fn handle_income_message<R: Repo>(
                     IncomeMessage::Unsubscribe {
                         topic: client_subscription_key,
                     } => {
+                        tracing::event!(
+                            tracing::Level::DEBUG,
+                            client_id,
+                            ?client_subscription_key,
+                            "Unsubscribe"
+                        );
                         let topic = Topic::try_from(&client_subscription_key)?;
 
                         if client_lock.contains_subscription(&topic) {
@@ -440,6 +466,7 @@ async fn on_disconnect(
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Topics>,
 ) -> () {
+    tracing::event!(tracing::Level::INFO, client_id, "Client disconnecting");
     loop {
         match client.try_lock() {
             Ok(mut client_lock) => {
@@ -469,6 +496,7 @@ async fn on_disconnect(
                     client_lock.messages_count();
                     "req_id" => client_lock.get_request_id().clone()
                 );
+                tracing::event!(tracing::Level::INFO, client_id, "Client disconnected");
 
                 break;
             }

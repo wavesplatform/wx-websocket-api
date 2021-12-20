@@ -256,6 +256,13 @@ impl Client {
                     latency * 1_000_f64,
                     topic
                 );
+                tracing::event!(
+                    tracing::Level::DEBUG,
+                    self.client_id,
+                    ?topic,
+                    latency,
+                    "Initial value sent (delayed)"
+                );
             }
         }
         Ok(())
