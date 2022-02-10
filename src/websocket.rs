@@ -68,7 +68,7 @@ pub async fn handle_connection<R: Repo>(
     .await;
 
     let disconnect_span = tracing::info_span!("client_disconnected", client_id);
-    disconnect_span.follows_from(connect_span_id);
+    //disconnect_span.follows_from(connect_span_id); //TODO This is not working - bug in tracing?
 
     on_disconnect(socket, client, client_id, clients, topics)
         .instrument(disconnect_span)
