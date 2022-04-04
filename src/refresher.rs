@@ -1,7 +1,8 @@
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use wavesexchange_log::{debug, timer};
+use tokio::select;
+use wavesexchange_log::{debug, timer, warn};
 
 use crate::client::Topics;
 use crate::error::Error;
@@ -32,11 +33,23 @@ impl<R: Repo> KeysRefresher<R> {
             let topics_to_update = {
                 let mut topics_to_update = Vec::new();
                 let expiry_time = Instant::now() - self.key_ttl / 2;
-                for (topic, key_info) in self.topics.read().await.topics_iter() {
-                    if key_info.is_expiring(expiry_time) {
-                        topics_to_update.push(topic.to_owned())
+
+                let get_read_guard_time = refresh_time / 16;
+
+                select! {
+                    read_guard = self.topics.read() => {
+                        for (topic, key_info) in read_guard.topics_iter() {
+                            if key_info.is_expiring(expiry_time) {
+                                topics_to_update.push(topic.to_owned())
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(get_read_guard_time) => {
+                        warn!("Refresh: cannot acquire read lock in {:?}, skip current refresh iteration", get_read_guard_time);
+                        continue;
                     }
                 }
+
                 topics_to_update
             };
 
