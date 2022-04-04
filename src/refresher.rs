@@ -33,6 +33,9 @@ impl<R: Repo> KeysRefresher<R> {
             let topics_to_update = {
                 let mut topics_to_update = Vec::new();
                 let expiry_time = Instant::now() - self.key_ttl / 2;
+
+                let get_read_guard_time = refresh_time / 16;
+
                 select! {
                     read_guard = self.topics.read() => {
                         for (topic, key_info) in read_guard.topics_iter() {
@@ -41,8 +44,8 @@ impl<R: Repo> KeysRefresher<R> {
                             }
                         }
                     }
-                    _ = tokio::time::sleep(refresh_time / 16) => {
-                        warn!("Refresh: cannot acquire read lock in {:?}, skip current refresh iteration", refresh_time / 16);
+                    _ = tokio::time::sleep(get_read_guard_time) => {
+                        warn!("Refresh: cannot acquire read lock in {:?}, skip current refresh iteration", get_read_guard_time);
                         continue;
                     }
                 }
