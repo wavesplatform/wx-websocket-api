@@ -254,7 +254,7 @@ async fn handle_income_message<R: Repo>(
                                     subtopics = Some(HashSet::<Topic>::from_iter(
                                         subtopics_vec.iter().cloned(),
                                     ));
-                                    let subtopic_values =
+                                    let mut subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
                                     debug!(
@@ -263,6 +263,7 @@ async fn handle_income_message<R: Repo>(
                                         subtopic_values;
                                         "topic" => format!("{:?}", topic)
                                     );
+                                    subtopic_values.filter_raw_null();
                                     send_value = subtopic_values.as_json_string();
                                 } else {
                                     send_value = value;
@@ -503,8 +504,9 @@ pub async fn updates_handler<R: Repo>(
                                 )
                             };
                             match subtopic_values.await {
-                                Ok(subtopic_values) => {
+                                Ok(mut subtopic_values) => {
                                     debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
+                                    subtopic_values.filter_raw_null();
                                     let subtopic_values_available = !subtopic_values.is_empty();
                                     if multitopic_is_empty {
                                         debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
@@ -732,6 +734,11 @@ mod values {
             // Serialization of this struct can't fail.
             // If it happens - something is fundamentally broken, so panic is ok here.
             serde_json::to_string(values).expect("TopicValues serialize")
+        }
+
+        pub fn filter_raw_null(&mut self) {
+            self.0
+                .retain(|e| !matches!(e, TopicValue::Raw(s) if s == "null"))
         }
     }
 
