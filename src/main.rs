@@ -16,8 +16,9 @@ use error::Error;
 use refresher::KeysRefresher;
 use repo::RepoImpl;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
-use wavesexchange_log::{debug, error};
+use wavesexchange_log::{debug, error, info};
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -53,11 +54,11 @@ async fn tokio_main() -> Result<(), Error> {
     ));
 
     let keys_refresher = KeysRefresher::new(repo.clone(), repo_config.key_ttl, topics.clone());
-    let keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });
+    let mut keys_refresher_handle = tokio::spawn(async move { keys_refresher.run().await });
 
     let (updates_sender, updates_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-    let websocket_updates_handler_handle = {
+    let mut websocket_updates_handler_handle = {
         let clients = clients.clone();
         let topics = topics.clone();
         tokio::task::spawn(websocket::updates_handler(
@@ -71,7 +72,7 @@ async fn tokio_main() -> Result<(), Error> {
     let redis_conn = redis::Client::open(redis_connection_url)?;
     let conn = redis_conn.clone();
 
-    let updater_handle = tokio::task::spawn_blocking(move || {
+    let mut updater_handle = tokio::task::spawn_blocking(move || {
         let err = updater::run(conn, app_config.updater_timeout, updates_sender);
         error!("updater returned an err: {:?}", err);
         err
@@ -85,31 +86,62 @@ async fn tokio_main() -> Result<(), Error> {
     let (server_stop_tx, server) = server::start(
         server_config.port,
         repo,
-        clients,
+        clients.clone(),
         topics,
         server_options,
         shutdown_signal_tx,
     );
     let server_handle = tokio::spawn(server);
 
+    let (shutdown_start_tx, shutdown_start_rx) = tokio::sync::oneshot::channel();
+    let mut shutdown_handle = tokio::spawn(async move {
+        if shutdown_start_rx.await.is_ok() {
+            info!("Graceful shutdown started");
+            let mut clients_to_kill = Vec::new();
+            for clients_shard in clients.as_ref().into_iter() {
+                let clients_shard = clients_shard.read().await;
+                for client in clients_shard.values() {
+                    clients_to_kill.push(client.clone());
+                }
+            }
+            for client in clients_to_kill {
+                tokio::time::sleep(Duration::from_millis(500)).await; //TODO make configurable
+                let mut client = client.lock().await;
+                client.graceful_kill();
+            }
+        }
+    });
+    let mut shutdown_start_tx = Some(shutdown_start_tx);
+
     let mut sigterm_stream =
         signal(SignalKind::terminate()).expect("error occurred while creating sigterm stream");
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            debug!("got sigint");
-        },
-        _ = sigterm_stream.recv() => {
-            debug!("got sigterm");
-        },
-        r = keys_refresher_handle => {
-            error!("keys_refresher finished: {:?}", r);
-        },
-        r = updater_handle => {
-            error!("updater finished: {:?}", r);
-        },
-        r = websocket_updates_handler_handle => {
-            error!("websocket updates handler finished: {:?}", r);
+    loop {
+        tokio::select! {
+            _ = sigterm_stream.recv() => {
+                debug!("got SIGTERM");
+                shutdown_start_tx.take().map(|tx| tx.send(()));
+            },
+            _ = tokio::signal::ctrl_c() => {
+                debug!("got SIGINT");
+                break;
+            },
+            _ = &mut shutdown_handle => {
+                debug!("Graceful shutdown finished");
+                break;
+            }
+            r = &mut keys_refresher_handle => {
+                error!("keys_refresher finished: {:?}", r);
+                break;
+            },
+            r = &mut updater_handle => {
+                error!("updater finished: {:?}", r);
+                break;
+            },
+            r = &mut websocket_updates_handler_handle => {
+                error!("websocket updates handler finished: {:?}", r);
+                break;
+            }
         }
     }
 
