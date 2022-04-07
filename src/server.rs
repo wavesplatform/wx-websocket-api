@@ -1,6 +1,7 @@
 use futures::future::FutureExt;
 use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
+use std::time::Duration;
 use warp::{Filter, Rejection, Reply};
 use wavesexchange_log::info;
 use wavesexchange_warp::log::access;
@@ -15,6 +16,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub client_ping_interval: u64,
     pub client_ping_failures_threshold: u16,
+    pub graceful_shutdown_duration: Duration,
 }
 
 pub struct ServerOptions {

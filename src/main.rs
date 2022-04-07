@@ -23,7 +23,7 @@ use wavesexchange_log::{debug, error, info};
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(tokio_main());
-    rt.shutdown_timeout(std::time::Duration::from_millis(1));
+    rt.shutdown_timeout(Duration::from_millis(1));
     result
 }
 
@@ -79,7 +79,7 @@ async fn tokio_main() -> Result<(), Error> {
     });
 
     let server_options = server::ServerOptions {
-        client_ping_interval: tokio::time::Duration::from_secs(server_config.client_ping_interval),
+        client_ping_interval: Duration::from_secs(server_config.client_ping_interval),
         client_ping_failures_threshold: server_config.client_ping_failures_threshold,
     };
     let (shutdown_signal_tx, mut shutdown_signal_rx) = tokio::sync::mpsc::channel(1);
@@ -104,8 +104,11 @@ async fn tokio_main() -> Result<(), Error> {
                     clients_to_kill.push(client.clone());
                 }
             }
+            let client_count = clients_to_kill.len() as u32;
+            let sleep_interval = server_config.graceful_shutdown_duration / client_count;
+            debug!("Client kill interval: {:?} ({} clients)", sleep_interval, client_count);
             for client in clients_to_kill {
-                tokio::time::sleep(Duration::from_millis(500)).await; //TODO make configurable
+                tokio::time::sleep(sleep_interval).await;
                 let mut client = client.lock().await;
                 client.graceful_kill();
             }
