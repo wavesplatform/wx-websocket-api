@@ -20,6 +20,10 @@ fn default_client_ping_failures_threshold() -> u16 {
     3
 }
 
+fn default_graceful_shutdown_duration_seconds() -> u64 {
+    600
+}
+
 fn default_key_ttl() -> u64 {
     60
 }
@@ -40,6 +44,8 @@ struct FlatServerConfig {
     pub client_ping_interval_in_secs: u64,
     #[serde(default = "default_client_ping_failures_threshold")]
     pub client_ping_failures_threshold: u16,
+    #[serde(default = "default_graceful_shutdown_duration_seconds")]
+    pub graceful_shutdown_duration_seconds: u64,
 }
 
 #[derive(Deserialize)]
@@ -118,5 +124,8 @@ pub fn load_server() -> Result<server::ServerConfig, Error> {
         port: flat_config.port,
         client_ping_interval: flat_config.client_ping_interval_in_secs,
         client_ping_failures_threshold: flat_config.client_ping_failures_threshold,
+        graceful_shutdown_duration: Duration::from_secs(
+            flat_config.graceful_shutdown_duration_seconds,
+        ),
     })
 }

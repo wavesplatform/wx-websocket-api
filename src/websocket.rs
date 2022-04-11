@@ -50,9 +50,12 @@ pub async fn handle_connection<R: Repo>(
 
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+
     let client = Arc::new(Mutex::new(Client::new(
         client_id,
-        client_tx.clone(),
+        client_tx,
+        kill_tx,
         request_id.clone(),
     )));
 
@@ -79,7 +82,10 @@ pub async fn handle_connection<R: Repo>(
     tokio::select! {
         _ = run_handler => {},
         _ = shutdown_signal.closed() => {
-            debug!("shutdown signal handled");
+            debug!("shutdown signal handled by Client#{}", client_id);
+        }
+        _ = kill_rx => {
+            debug!("graceful kill handled by Client#{}", client_id);
         }
     }
 
