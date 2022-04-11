@@ -7,6 +7,7 @@ impl TryFrom<&ClientSubscriptionKey> for Topic {
     type Error = Error;
 
     fn try_from(v: &ClientSubscriptionKey) -> Result<Self, Self::Error> {
-        Topic::try_from(v.0.as_str()).map_err(Error::TopicError)
+        let topic = &v.0;
+        Topic::try_from(topic.as_str()).map_err(|_| Error::InvalidTopic(topic.clone()))
     }
 }
