@@ -20,6 +20,7 @@ pub struct ClientSubscriptionKey(pub String);
 pub struct Client {
     client_id: ClientId,
     sender: ClientSender,
+    kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
     subscriptions: HashMap<Topic, ClientSubscriptionData>,
     request_id: Option<String>,
 }
@@ -93,6 +94,7 @@ impl Client {
     pub fn new(
         client_id: ClientId,
         sender: tokio::sync::mpsc::UnboundedSender<Message>,
+        kill_sender: tokio::sync::oneshot::Sender<()>,
         request_id: Option<String>,
     ) -> Self {
         Client {
@@ -102,9 +104,15 @@ impl Client {
                 message_counter: 1,
                 pings: vec![],
             },
+            kill_tx: Some(kill_sender),
             request_id,
             subscriptions: HashMap::new(),
         }
+    }
+
+    pub fn graceful_kill(&mut self) {
+        debug!("Gracefully killing Client#{}", self.client_id);
+        self.kill_tx.take().map(|tx| tx.send(()));
     }
 
     pub fn get_request_id(&self) -> &Option<String> {

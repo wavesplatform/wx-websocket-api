@@ -50,9 +50,12 @@ pub async fn handle_connection<R: Repo>(
 
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+
     let client = Arc::new(Mutex::new(Client::new(
         client_id,
-        client_tx.clone(),
+        client_tx,
+        kill_tx,
         request_id.clone(),
     )));
 
@@ -79,7 +82,10 @@ pub async fn handle_connection<R: Repo>(
     tokio::select! {
         _ = run_handler => {},
         _ = shutdown_signal.closed() => {
-            debug!("shutdown signal handled");
+            debug!("shutdown signal handled by Client#{}", client_id);
+        }
+        _ = kill_rx => {
+            debug!("graceful kill handled by Client#{}", client_id);
         }
     }
 
@@ -126,12 +132,14 @@ async fn run<R: Repo>(
 
                     if match handle_income_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client, client_id).await,
-                        Err(Error::InvalidTopic(error)) => {
-                            let error = format!("Invalid topic: {:?} – {}", msg, error);
-                            send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client, client_id).await
-                        }
-                        Err(Error::UrlParseError(error)) => {
-                            let error = format!("Invalid topic format: {:?} – {:?}", msg, error);
+                        Err(Error::InvalidTopic(topic)) => {
+                            debug!(
+                                "Bad request: Client#{} has sent invalid topic '{}' in message '{}'",
+                                client_id,
+                                topic,
+                                msg.to_str().unwrap_or("<BINARY>"),
+                            );
+                            let error = format!("Invalid topic: {}", topic);
                             send_error(error, "Invalid topic", INVALID_TOPIC_ERROR_CODE, client, client_id).await
                         }
                         Err(Error::InvalidPongMessage) => {

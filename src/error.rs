@@ -30,8 +30,6 @@ pub enum Error {
     InvalidSubscribeMessage,
     #[error("InvalidUnsubscribeMessage")]
     InvalidUnsubscribeMessage,
-    #[error("UrlParseError: {0}")]
-    UrlParseError(#[from] url::ParseError),
     #[error("InvalidPongMessage")]
     InvalidPongMessage,
     #[error("UnknownIncomeMessage: {0}")]
@@ -46,8 +44,6 @@ pub enum Error {
     InvalidTransactionQuery(ErrorQuery),
     #[error("InvalidLeasingPath: {0}")]
     InvalidLeasingPath(String),
-    #[error("TopicError: {0}")]
-    TopicError(wavesexchange_topic::error::Error),
 }
 
 #[derive(Debug)]
