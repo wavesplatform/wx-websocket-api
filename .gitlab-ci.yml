@@ -1,9 +1,9 @@
 include:
   - project: 'we-private/backend/common-ci'
-    ref: master
+    ref: ci
     file: 'ci-functions/build_image.yml'
   - project: 'we-private/backend/common-ci'
-    ref: master
+    ref: ci
     file: 'ci-functions/deploy_stages.yml'
 
 variables:
