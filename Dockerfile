@@ -12,7 +12,7 @@ COPY ./src ./src
 
 RUN cargo install --path .
 
-FROM debian:stretch
+FROM debian:11
 WORKDIR /usr/www/app
 RUN apt-get update && apt-get install -y curl openssl libssl-dev
 # RUN curl -ks 'https://cert.host.server/ssl_certs/EnterpriseRootCA.crt' -o '/usr/local/share/ca-certificates/EnterpriseRootCA.crt'
