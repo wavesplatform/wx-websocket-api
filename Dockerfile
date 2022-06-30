@@ -6,7 +6,7 @@ RUN rustup component add rustfmt
 RUN echo "fn main() {}" > dummy.rs
 COPY Cargo.* ./
 RUN sed -i 's#src/main.rs#dummy.rs#' Cargo.toml
-RUN cargo build --release
+RUN cargo build -j4 --release
 RUN sed -i 's#dummy.rs#src/main.rs#' Cargo.toml
 COPY ./src ./src
 
