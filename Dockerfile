@@ -1,4 +1,4 @@
-FROM rust:1.56 as builder
+FROM rust:1.58 as builder
 WORKDIR /usr/src/service
 
 RUN rustup component add rustfmt
