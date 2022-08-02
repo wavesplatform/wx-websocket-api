@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
-use crate::metrics::MESSAGES;
+use crate::metrics::{MESSAGES, TOPICS, TOPIC_SUBSCRIBED, TOPIC_UNSUBSCRIBED};
 use prometheus::HistogramTimer;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -463,6 +463,8 @@ impl ClientIdsByTopics {
                 );
             })
             .or_insert_with(|| {
+                TOPIC_SUBSCRIBED.inc();
+                TOPICS.inc();
                 debug!(
                     "Created new key_info (Client#{}, subscription_key={:?})",
                     client_id, subscription_key
@@ -481,6 +483,8 @@ impl ClientIdsByTopics {
             );
             key_info.clients.remove(client_id);
             if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                TOPIC_UNSUBSCRIBED.inc();
+                TOPICS.dec();
                 debug!(
                     "Removing key_info for topic {:?} (due to Client#{}): {:?}",
                     topic, client_id, key_info
@@ -510,6 +514,8 @@ impl ClientIdsByTopics {
                 );
             })
             .or_insert_with(|| {
+                TOPIC_SUBSCRIBED.inc();
+                TOPICS.inc();
                 debug!("Created new key_info for multitopic {:?}", multitopic);
                 KeyInfo::new()
             });
@@ -555,6 +561,8 @@ impl ClientIdsByTopics {
                 .entry(topic.clone())
                 .and_modify(|_| debug!("Found existing key_info for subtopic {:?}", topic))
                 .or_insert_with(|| {
+                    TOPIC_SUBSCRIBED.inc();
+                    TOPICS.inc();
                     debug!("Created new key_info for subtopic {:?}", topic);
                     KeyInfo::new()
                 })
@@ -577,6 +585,8 @@ impl ClientIdsByTopics {
                     }
                 }
                 if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                    TOPIC_UNSUBSCRIBED.inc();
+                    TOPICS.dec();
                     debug!(
                         "Removing key_info for subtopic {:?} (due to Client#{}): {:?}",
                         topic, client_id, key_info
@@ -616,6 +626,8 @@ impl ClientIdsByTopics {
                         }
                     }
                     if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
+                        TOPIC_UNSUBSCRIBED.inc();
+                        TOPICS.dec();
                         debug!(
                             "Removing2 key_info for subtopic {:?} (due to Client#{}): {:?}",
                             topic, client_id, key_info

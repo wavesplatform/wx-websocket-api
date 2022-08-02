@@ -12,7 +12,10 @@ use wavesexchange_topic::{State, StateSingle, Topic};
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
 use crate::messages::IncomeMessage;
-use crate::metrics::{CLIENTS, REDIS_INPUT_QUEUE_SIZE, SUBSCRIBED_MESSAGE_LATENCIES};
+use crate::metrics::{
+    CLIENTS, CLIENT_CONNECT, CLIENT_DISCONNECT, REDIS_INPUT_QUEUE_SIZE,
+    SUBSCRIBED_MESSAGE_LATENCIES,
+};
 use crate::repo::Repo;
 use crate::shard::Sharded;
 
@@ -60,6 +63,7 @@ pub async fn handle_connection<R: Repo>(
     )));
 
     CLIENTS.inc();
+    CLIENT_CONNECT.inc();
 
     clients
         .get(&client_id)
@@ -93,6 +97,7 @@ pub async fn handle_connection<R: Repo>(
     on_disconnect(socket, client, client_id, clients, topics).await;
 
     CLIENTS.dec();
+    CLIENT_DISCONNECT.inc();
 
     Ok(())
 }
