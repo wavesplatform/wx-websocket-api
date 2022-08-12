@@ -49,6 +49,26 @@ lazy_static! {
         "Size of incoming Redis messages queue"
     )
     .expect("can't create message_queue metrics");
+    pub static ref TOPICS_HASHMAP_SIZE: IntGauge = IntGauge::new(
+        "Backend_websocket_Topics_hashmap_size",
+        "Size of the global 'Topics' hashmap"
+    )
+    .expect("can't create TOPICS_HASHMAP_SIZE metrics");
+    pub static ref TOPICS_HASHMAP_CAPACITY: IntGauge = IntGauge::new(
+        "Backend_websocket_Topics_hashmap_capacity",
+        "Capacity of the global 'Topics' hashmap"
+    )
+    .expect("can't create TOPICS_HASHMAP_CAPACITY metrics");
+    // pub static ref CLIENTS_HASHMAP_SIZE: IntGauge = IntGauge::new(
+    //     "Backend_websocket_Clients_hashmap_size",
+    //     "Size of the global 'Clients' hashmap"
+    // )
+    // .expect("can't create CLIENTS_HASHMAP_SIZE metrics");
+    // pub static ref CLIENTS_HASHMAP_CAPACITY: IntGauge = IntGauge::new(
+    //     "Backend_websocket_Clients_hashmap_capacity",
+    //     "Capacity of the global 'Clients' hashmap"
+    // )
+    // .expect("can't create CLIENTS_HASHMAP_CAPACITY metrics");
 }
 
 pub fn register_metrics() {
@@ -87,4 +107,20 @@ pub fn register_metrics() {
     REGISTRY
         .register(Box::new(REDIS_INPUT_QUEUE_SIZE.clone()))
         .expect("can't register redis_input_queue_size metrics");
+
+    REGISTRY
+        .register(Box::new(TOPICS_HASHMAP_SIZE.clone()))
+        .expect("can't register TOPICS_HASHMAP_SIZE metrics");
+
+    REGISTRY
+        .register(Box::new(TOPICS_HASHMAP_CAPACITY.clone()))
+        .expect("can't register TOPICS_HASHMAP_CAPACITY metrics");
+
+    // REGISTRY
+    //     .register(Box::new(CLIENTS_HASHMAP_SIZE.clone()))
+    //     .expect("can't register CLIENTS_HASHMAP_SIZE metrics");
+
+    // REGISTRY
+    //     .register(Box::new(CLIENTS_HASHMAP_CAPACITY.clone()))
+    //     .expect("can't register CLIENTS_HASHMAP_CAPACITY metrics");
 }

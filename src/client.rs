@@ -1,6 +1,9 @@
 use crate::error::Error;
 use crate::messages::OutcomeMessage;
-use crate::metrics::{MESSAGES, TOPICS, TOPIC_SUBSCRIBED, TOPIC_UNSUBSCRIBED};
+use crate::metrics::{
+    MESSAGES, TOPICS, TOPICS_HASHMAP_CAPACITY, TOPICS_HASHMAP_SIZE, TOPIC_SUBSCRIBED,
+    TOPIC_UNSUBSCRIBED,
+};
 use prometheus::HistogramTimer;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -454,6 +457,7 @@ impl ClientIdsByTopics {
             "[ClientIdsByTopics] Client#{} directly subscribed to {:?}",
             client_id, subscription_key
         );
+        let mut changed = false;
         self.0
             .entry(topic)
             .and_modify(|key_info| {
@@ -465,6 +469,7 @@ impl ClientIdsByTopics {
             .or_insert_with(|| {
                 TOPIC_SUBSCRIBED.inc();
                 TOPICS.inc();
+                changed = true;
                 debug!(
                     "Created new key_info (Client#{}, subscription_key={:?})",
                     client_id, subscription_key
@@ -473,6 +478,10 @@ impl ClientIdsByTopics {
             })
             .clients
             .insert(client_id, subscription_key);
+        if changed {
+            TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
+            TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
+        }
     }
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
@@ -490,6 +499,8 @@ impl ClientIdsByTopics {
                     topic, client_id, key_info
                 );
                 self.0.remove(topic);
+                TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
+                TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
             } else {
                 debug!(
                     "Keeping key_info for topic {:?} (due to Client#{}): {:?}",
@@ -504,6 +515,8 @@ impl ClientIdsByTopics {
         multitopic: Topic,
         subtopics: HashSet<Topic>,
     ) -> MultitopicUpdate {
+        let mut changed = false;
+
         let key_info = self
             .0
             .entry(multitopic.clone())
@@ -516,6 +529,7 @@ impl ClientIdsByTopics {
             .or_insert_with(|| {
                 TOPIC_SUBSCRIBED.inc();
                 TOPICS.inc();
+                changed = true;
                 debug!("Created new key_info for multitopic {:?}", multitopic);
                 KeyInfo::new()
             });
@@ -540,6 +554,11 @@ impl ClientIdsByTopics {
             key_info.subtopics = subtopics;
         }
 
+        if changed {
+            TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
+            TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
+        }
+
         MultitopicUpdate {
             added_subtopics,
             removed_subtopics,
@@ -552,6 +571,8 @@ impl ClientIdsByTopics {
         update: MultitopicUpdate,
         client_id: &ClientId,
     ) {
+        let mut changed = false;
+
         for topic in update.added_subtopics {
             debug!(
                 "[ClientIdsByTopics] Client#{} indirectly subscribed to {:?}",
@@ -563,6 +584,7 @@ impl ClientIdsByTopics {
                 .or_insert_with(|| {
                     TOPIC_SUBSCRIBED.inc();
                     TOPICS.inc();
+                    changed = true;
                     debug!("Created new key_info for subtopic {:?}", topic);
                     KeyInfo::new()
                 })
@@ -587,6 +609,7 @@ impl ClientIdsByTopics {
                 if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
                     TOPIC_UNSUBSCRIBED.inc();
                     TOPICS.dec();
+                    changed = true;
                     debug!(
                         "Removing key_info for subtopic {:?} (due to Client#{}): {:?}",
                         topic, client_id, key_info
@@ -600,6 +623,11 @@ impl ClientIdsByTopics {
                 }
             }
         }
+
+        if changed {
+            TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
+            TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
+        }
     }
 
     pub fn remove_indirect_subscriptions(
@@ -608,6 +636,7 @@ impl ClientIdsByTopics {
         client_id: &ClientId,
     ) -> Vec<Topic> {
         if let Some(multitopic_key_info) = self.0.get(multitopic) {
+            let mut changed = false;
             let subtopics = multitopic_key_info
                 .subtopics
                 .iter()
@@ -628,6 +657,7 @@ impl ClientIdsByTopics {
                     if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
                         TOPIC_UNSUBSCRIBED.inc();
                         TOPICS.dec();
+                        changed = true;
                         debug!(
                             "Removing2 key_info for subtopic {:?} (due to Client#{}): {:?}",
                             topic, client_id, key_info
@@ -640,6 +670,10 @@ impl ClientIdsByTopics {
                         );
                     }
                 }
+            }
+            if changed {
+                TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
+                TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
             }
             subtopics
         } else {
