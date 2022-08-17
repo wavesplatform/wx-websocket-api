@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::metrics::REDIS_INPUT_QUEUE_SIZE;
+use crate::topic::Topic;
 use std::convert::TryFrom;
-use wavesexchange_topic::Topic;
 
 pub fn run(
     redis_client: redis::Client,

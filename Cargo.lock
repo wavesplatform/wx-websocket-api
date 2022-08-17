@@ -1013,6 +1013,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_qs"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cac3f1e2ca2fe333923a1ae72caca910b98ed0630bb35ef6f8c8517d6e81afa"
+dependencies = [
+ "percent-encoding",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,18 +1643,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wavesexchange_topic"
-version = "0.2.1"
-source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_topic/0.2.1#a490af400cdd26a8e5451262e71b494578527302"
-dependencies = [
- "percent-encoding",
- "serde",
- "serde_qs",
- "thiserror",
- "url",
-]
-
-[[package]]
 name = "wavesexchange_warp"
 version = "0.12.2"
 source = "git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.2#f23ce00338fa8ce320f9627e1dc099bcc5244ddc"
@@ -1652,7 +1651,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
- "serde_qs",
+ "serde_qs 0.8.5",
  "warp",
  "wavesexchange_log 0.5.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_warp/0.12.2)",
 ]
@@ -1669,17 +1668,18 @@ dependencies = [
  "futures",
  "futures-util",
  "lazy_static",
+ "percent-encoding",
  "prometheus",
  "redis",
  "serde",
  "serde_json",
+ "serde_qs 0.10.1",
  "slog",
  "thiserror",
  "tokio",
  "url",
  "warp",
  "wavesexchange_log 0.5.0 (git+https://github.com/waves-exchange/wavesexchange-rs?tag=wavesexchange_log/0.5.0)",
- "wavesexchange_topic",
  "wavesexchange_warp",
 ]
 

@@ -10,6 +10,7 @@ mod refresher;
 mod repo;
 mod server;
 mod shard;
+mod topic;
 mod updater;
 mod websocket;
 

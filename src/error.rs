@@ -1,4 +1,4 @@
-use wavesexchange_topic::Topic;
+use crate::topic::Topic;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

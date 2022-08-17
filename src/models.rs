@@ -1,7 +1,7 @@
 use crate::client::ClientSubscriptionKey;
 use crate::error::Error;
+use crate::topic::Topic;
 use std::convert::TryFrom;
-use wavesexchange_topic::Topic;
 
 impl TryFrom<&ClientSubscriptionKey> for Topic {
     type Error = Error;
