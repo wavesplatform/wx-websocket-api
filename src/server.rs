@@ -3,7 +3,6 @@ use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use std::time::Duration;
 use warp::{Filter, Rejection, Reply};
-use wavesexchange_log::info;
 use wavesexchange_warp::log::access;
 
 use crate::client::{Clients, Topics};
@@ -69,7 +68,7 @@ pub fn start<R: Repo + 'static>(
 
     let metrics = warp::path!("metrics").and_then(metrics_handler);
 
-    info!("websocket server listening on 0.0.0.0:{}", server_port);
+    log::info!("websocket server listening on 0.0.0.0:{}", server_port);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (_addr, server) = warp::serve(ws.or(metrics)).bind_with_graceful_shutdown(

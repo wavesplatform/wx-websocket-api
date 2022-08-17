@@ -1,3 +1,5 @@
+extern crate wavesexchange_log as log;
+
 mod client;
 mod config;
 mod error;
@@ -18,7 +20,6 @@ use repo::RepoImpl;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
-use wavesexchange_log::{debug, error, info};
 
 fn main() -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -74,7 +75,7 @@ async fn tokio_main() -> Result<(), Error> {
 
     let mut updater_handle = tokio::task::spawn_blocking(move || {
         let err = updater::run(conn, app_config.updater_timeout, updates_sender);
-        error!("updater returned an err: {:?}", err);
+        log::error!("updater returned an err: {:?}", err);
         err
     });
 
@@ -96,7 +97,7 @@ async fn tokio_main() -> Result<(), Error> {
     let (shutdown_start_tx, shutdown_start_rx) = tokio::sync::oneshot::channel();
     let mut shutdown_handle = tokio::spawn(async move {
         if shutdown_start_rx.await.is_ok() {
-            info!("Graceful shutdown started");
+            log::info!("Graceful shutdown started");
             let mut clients_to_kill = Vec::new();
             for clients_shard in clients.as_ref().into_iter() {
                 let clients_shard = clients_shard.read().await;
@@ -106,7 +107,11 @@ async fn tokio_main() -> Result<(), Error> {
             }
             let client_count = clients_to_kill.len() as u32;
             let sleep_interval = server_config.graceful_shutdown_duration / client_count;
-            debug!("Client kill interval: {:?} ({} clients)", sleep_interval, client_count);
+            log::debug!(
+                "Client kill interval: {:?} ({} clients)",
+                sleep_interval,
+                client_count,
+            );
             for client in clients_to_kill {
                 tokio::time::sleep(sleep_interval).await;
                 let mut client = client.lock().await;
@@ -122,27 +127,27 @@ async fn tokio_main() -> Result<(), Error> {
     loop {
         tokio::select! {
             _ = sigterm_stream.recv() => {
-                debug!("got SIGTERM");
+                log::debug!("got SIGTERM");
                 shutdown_start_tx.take().map(|tx| tx.send(()));
             },
             _ = tokio::signal::ctrl_c() => {
-                debug!("got SIGINT");
+                log::debug!("got SIGINT");
                 break;
             },
             _ = &mut shutdown_handle => {
-                debug!("Graceful shutdown finished");
+                log::debug!("Graceful shutdown finished");
                 break;
             }
             r = &mut keys_refresher_handle => {
-                error!("keys_refresher finished: {:?}", r);
+                log::error!("keys_refresher finished: {:?}", r);
                 break;
             },
             r = &mut updater_handle => {
-                error!("updater finished: {:?}", r);
+                log::error!("updater finished: {:?}", r);
                 break;
             },
             r = &mut websocket_updates_handler_handle => {
-                error!("websocket updates handler finished: {:?}", r);
+                log::error!("websocket updates handler finished: {:?}", r);
                 break;
             }
         }

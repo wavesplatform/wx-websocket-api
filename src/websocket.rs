@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
-use wavesexchange_log::{debug, error, info, trace};
 use wavesexchange_topic::{State, StateSingle, Topic};
 
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
@@ -49,7 +48,7 @@ pub async fn handle_connection<R: Repo>(
 ) -> Result<(), Error> {
     let client_id = repo.get_connection_id().await?;
 
-    info!("Client#{} connected", client_id);
+    log::info!("Client#{} connected", client_id);
 
     let (client_tx, client_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -86,10 +85,10 @@ pub async fn handle_connection<R: Repo>(
     tokio::select! {
         _ = run_handler => {},
         _ = shutdown_signal.closed() => {
-            debug!("shutdown signal handled by Client#{}", client_id);
+            log::debug!("shutdown signal handled by Client#{}", client_id);
         }
         _ = kill_rx => {
-            debug!("graceful kill handled by Client#{}", client_id);
+            log::debug!("graceful kill handled by Client#{}", client_id);
         }
     }
 
@@ -121,13 +120,13 @@ async fn run<R: Repo>(
                     let msg = match next_msg_result {
                         Ok(msg) => msg,
                         Err(disconnected) => {
-                            debug!("Connection to Client#{} was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
+                            log::debug!("Connection to Client#{} was unexpectedly closed: {}", client_id, disconnected; "req_id" => request_id);
                             break;
                         }
                     };
 
                     if msg.is_close() {
-                        debug!("Connection to Client#{} was closed", client_id; "req_id" => request_id);
+                        log::debug!("Connection to Client#{} was closed", client_id; "req_id" => request_id);
                         break;
                     }
 
@@ -138,7 +137,7 @@ async fn run<R: Repo>(
                     if match handle_income_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client, client_id).await,
                         Err(Error::InvalidTopic(topic)) => {
-                            debug!(
+                            log::debug!(
                                 "Bad request: Client#{} has sent invalid topic '{}' in message '{}'",
                                 client_id,
                                 topic,
@@ -153,12 +152,12 @@ async fn run<R: Repo>(
                             break;
                         }
                         Err(err) => {
-                            error!("Error occurred while processing Client#{} message: {:?} – {:?}", client_id, msg, err);
+                            log::error!("Error occurred while processing Client#{} message: {:?} – {:?}", client_id, msg, err);
                             break;
                         }
                         _ => Ok(())
                     }.is_err() {
-                        error!("Error occurred while sending message to Client#{}", client_id);
+                        log::error!("Error occurred while sending message to Client#{}", client_id);
                         break;
                     }
                 }
@@ -166,9 +165,9 @@ async fn run<R: Repo>(
             // outcome message (to ws)
             msg = client_rx.recv() => {
                 if let Some(message) = msg {
-                    debug!("Sending message to Client#{:?}", client_id);
+                    log::debug!("Sending message to Client#{:?}", client_id);
                     if let Err(err) = socket.send(message).await {
-                        error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
+                        log::error!("error occurred while sending message to ws client: {:?}", err; "req_id" => request_id);
                         break;
                     }
                 } else {
@@ -181,17 +180,17 @@ async fn run<R: Repo>(
                     match client.try_lock() {
                         Ok(mut client_lock) => {
                             if client_lock.pings_len() >= options.ping_failures_threshold {
-                                debug!("Client#{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
+                                log::debug!("Client#{} did not answer for {} consequent ping messages", client_id, options.ping_failures_threshold);
                                 break;
                             }
                             if let Err(error) = client_lock.send_ping() {
-                                error!("Error occurred while sending ping message to Client#{}: {:?}", client_id, error);
+                                log::error!("Error occurred while sending ping message to Client#{}: {:?}", client_id, error);
                                 break;
                             }
                             break;
                         }
                         Err(_) => {
-                            debug!(
+                            log::debug!(
                                 "Client#{} is locked while ping sending, try to wait",
                                 client_id
                             );
@@ -226,9 +225,10 @@ async fn handle_income_message<R: Repo>(
                     IncomeMessage::Subscribe {
                         topic: client_subscription_key,
                     } => {
-                        debug!(
+                        log::debug!(
                             "Handling Client#{} subscription to key {:?}",
-                            client_id, client_subscription_key
+                            client_id,
+                            client_subscription_key,
                         );
 
                         let latency_timer = SUBSCRIBED_MESSAGE_LATENCIES.start_timer();
@@ -252,13 +252,13 @@ async fn handle_income_message<R: Repo>(
                                 client_lock.add_direct_subscription(topic, key);
                             }
                             let value = repo.get_by_key(&subscription_key).await?;
-                            debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
+                            log::debug!("Current value in Redis: {:?}", value; "topic" => format!("{:?}", topic));
                             let subtopics;
                             if let Some(value) = value {
                                 let send_value;
                                 if topic.is_multi_topic() {
                                     let subtopics_vec = parse_subtopic_list::<Vec<_>>(&value)?;
-                                    debug!(
+                                    log::debug!(
                                         "Subtopics ({}): {:?}",
                                         subtopics_vec.len(),
                                         subtopics_vec;
@@ -270,7 +270,7 @@ async fn handle_income_message<R: Repo>(
                                     let mut subtopic_values =
                                         fetch_subtopic_values(repo, subtopics_vec, Vec::new())
                                             .await?;
-                                    debug!(
+                                    log::debug!(
                                         "Subtopic values ({}): {:?}",
                                         subtopic_values.0.len(),
                                         subtopic_values;
@@ -284,7 +284,7 @@ async fn handle_income_message<R: Repo>(
                                 }
                                 client_lock.send_subscribed(&topic, send_value)?;
                                 let latency = latency_timer.stop_and_record();
-                                debug!(
+                                log::debug!(
                                     "Latency {}ms (immediate send), topic {:?}",
                                     latency * 1_000_f64,
                                     topic
@@ -296,11 +296,11 @@ async fn handle_income_message<R: Repo>(
                             let key = client_subscription_key.clone();
                             topics_lock.add_subscription(topic.clone(), *client_id, key);
                             if let Some(subtopics) = subtopics {
-                                debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
+                                log::debug!("Subtopics: {:?}", subtopics; "topic" => format!("{:?}", topic));
                                 let _ = topics_lock
                                     .update_multitopic_info(topic.clone(), subtopics.clone());
                                 for subtopic in subtopics.iter().cloned() {
-                                    trace!("    Subtopic: {:?}", subtopic);
+                                    log::trace!("    Subtopic: {:?}", subtopic);
                                     client_lock.add_indirect_subscription(
                                         subtopic,
                                         topic.clone(),
@@ -340,7 +340,7 @@ async fn handle_income_message<R: Repo>(
                 break;
             }
             Err(_) => {
-                debug!(
+                log::debug!(
                     "Client#{} is locked while income message handling, try to wait",
                     client_id
                 );
@@ -372,7 +372,7 @@ async fn send_error(
                 break;
             }
             Err(_) => {
-                debug!(
+                log::debug!(
                     "Client#{} is locked while error sending, try to wait",
                     client_id
                 );
@@ -417,7 +417,7 @@ async fn on_disconnect(
                     })
                     .await;
 
-                info!(
+                log::info!(
                     "Client#{} disconnected; he got {} messages",
                     client_id,
                     client_lock.messages_count();
@@ -427,7 +427,7 @@ async fn on_disconnect(
                 break;
             }
             Err(_) => {
-                debug!(
+                log::debug!(
                     "Client#{} is locked while disconnecting, try to wait",
                     client_id
                 );
@@ -439,14 +439,14 @@ async fn on_disconnect(
         }
     }
 
-    debug!(
+    log::debug!(
         "Client#{} subscriptions cleared; remove him from clients",
         client_id
     );
 
     clients.get(&client_id).write().await.remove(&client_id);
 
-    debug!("Client#{} removed from clients", client_id);
+    log::debug!("Client#{} removed from clients", client_id);
 
     // 1) errors will be only if socket already closed so just mute it
     // 2) client.sender sink closed, so send message using socket
@@ -461,7 +461,7 @@ pub async fn updates_handler<R: Repo>(
     topics: Arc<Topics>,
     repo: Arc<R>,
 ) {
-    info!("websocket updates handler started");
+    log::info!("websocket updates handler started");
 
     enum Update {
         Ignore,
@@ -480,7 +480,7 @@ pub async fn updates_handler<R: Repo>(
         REDIS_INPUT_QUEUE_SIZE.dec();
         let subscribed_clients = topics.read().await.get_subscribed_clients(&topic);
         let has_subscribed_clients = !subscribed_clients.is_empty();
-        debug!(
+        log::debug!(
             "Topic updated in Redis: {:?}\n\tValue: {:?}\n\tSubscribed clients ({}): {:?}",
             topic,
             value,
@@ -494,13 +494,13 @@ pub async fn updates_handler<R: Repo>(
                     match parse_subtopic_list::<HashSet<_>>(&value) {
                         Ok(subtopics) => {
                             let multitopic_is_empty = subtopics.is_empty();
-                            debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
+                            log::debug!("Subtopics (from Redis): {:?}", subtopics; "topic" => format!("{:?}", topic));
                             let mut topics_lock = topics.write().await;
                             let multitopic_update = {
                                 let topic = topic.clone();
                                 topics_lock.update_multitopic_info(topic, subtopics)
                             };
-                            debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
+                            log::debug!("Multitopic update: {:?}", multitopic_update; "topic" => format!("{:?}", topic));
                             for client_id in subscribed_clients.keys() {
                                 topics_lock.update_indirect_subscriptions(
                                     topic.clone(),
@@ -518,14 +518,14 @@ pub async fn updates_handler<R: Repo>(
                             };
                             match subtopic_values.await {
                                 Ok(mut subtopic_values) => {
-                                    debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
+                                    log::debug!("Subtopic values: {:?}", subtopic_values; "topic" => format!("{:?}", topic));
                                     subtopic_values.filter_raw_null();
                                     let subtopic_values_available = !subtopic_values.is_empty();
                                     if multitopic_is_empty {
-                                        debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                        log::debug!("Update accepted: multitopic is empty"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
                                     }
                                     if subtopic_values_available {
-                                        debug!("Update accepted: subtopic values available"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
+                                        log::debug!("Update accepted: subtopic values available"; "topic" => format!("{:?}", topic), "value" => subtopic_values.as_json_string());
                                     }
                                     if multitopic_is_empty || subtopic_values_available {
                                         Update::Multi {
@@ -534,7 +534,7 @@ pub async fn updates_handler<R: Repo>(
                                             multitopic_update,
                                         }
                                     } else {
-                                        debug!("Update ignored: has subtopics but values not available yet"; "topic" => format!("{:?}", topic));
+                                        log::debug!("Update ignored: has subtopics but values not available yet"; "topic" => format!("{:?}", topic));
                                         // Values of the new topics not yet available,
                                         // so just ignore the update,
                                         // it will be received later again as individual
@@ -543,7 +543,7 @@ pub async fn updates_handler<R: Repo>(
                                     }
                                 }
                                 Err(err) => {
-                                    error!(
+                                    log::error!(
                                         "failed to build update for multitopic {}; error = {}",
                                         format!("{:?}", topic),
                                         err; "topic" => format!("{:?}", topic)
@@ -553,7 +553,7 @@ pub async fn updates_handler<R: Repo>(
                             }
                         }
                         Err(err) => {
-                            error!(
+                            log::error!(
                                 "multitopic {} has unrecognized value {}; error = {}",
                                 format!("{:?}", topic),
                                 value,
@@ -566,7 +566,7 @@ pub async fn updates_handler<R: Repo>(
                     Update::Single { topic, value }
                 }
             } else {
-                debug!("there are no clients to send update to"; "topic" => format!("{:?}", topic));
+                log::debug!("there are no clients to send update to"; "topic" => format!("{:?}", topic));
                 Update::Ignore
             }
         };
@@ -591,7 +591,7 @@ pub async fn updates_handler<R: Repo>(
                     }
                 });
             for (client_id, client, subscribed) in matching_clients_iter {
-                debug!("Sending update to Client#{:?}", client_id);
+                log::debug!("Sending update to Client#{:?}", client_id);
                 loop {
                     match client.try_lock() {
                         Ok(mut client_lock) => {
@@ -630,7 +630,7 @@ pub async fn updates_handler<R: Repo>(
                             break;
                         }
                         Err(_) => {
-                            debug!(
+                            log::debug!(
                                 "Client#{} is locked while sending update, try to wait",
                                 client_id
                             );
@@ -645,7 +645,7 @@ pub async fn updates_handler<R: Repo>(
         }
 
         let broadcasting_end = Instant::now();
-        debug!(
+        log::debug!(
             "update successfully sent to {} clients for {} ms",
             subscribed_clients.len(),
             broadcasting_end

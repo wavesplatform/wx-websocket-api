@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
-use wavesexchange_log::{debug, warn};
 use wavesexchange_topic::Topic;
 
 pub type ClientId = usize;
@@ -114,7 +113,7 @@ impl Client {
     }
 
     pub fn graceful_kill(&mut self) {
-        debug!("Gracefully killing Client#{}", self.client_id);
+        log::debug!("Gracefully killing Client#{}", self.client_id);
         self.kill_tx.take().map(|tx| tx.send(()));
     }
 
@@ -131,9 +130,11 @@ impl Client {
         topic: Topic,
         client_subscription_key: ClientSubscriptionKey,
     ) {
-        debug!(
+        log::debug!(
             "[Client] Client#{} directly subscribed to {:?}\n\tSubscription key: {:?}",
-            self.client_id, topic, client_subscription_key
+            self.client_id,
+            topic,
+            client_subscription_key,
         );
         let subscription_data = self.subscriptions.entry(topic).or_default();
         subscription_data.subscription_key = client_subscription_key;
@@ -146,7 +147,7 @@ impl Client {
         parent_multitopic: Topic,
         client_subscription_key: ClientSubscriptionKey,
     ) {
-        debug!(
+        log::debug!(
             "[Client] Client#{} indirectly subscribed to {:?}\n\tParent multitopic {:?}\n\tSubscription key: {:?}",
             self.client_id, topic, parent_multitopic, client_subscription_key
         );
@@ -170,9 +171,10 @@ impl Client {
     }
 
     pub fn remove_direct_subscription(&mut self, topic: &Topic) {
-        debug!(
+        log::debug!(
             "[Client] Client#{} directly unsubscribed from {:?}",
-            self.client_id, topic
+            self.client_id,
+            topic,
         );
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
             subscription_data.is_direct = false;
@@ -185,9 +187,11 @@ impl Client {
 
     pub fn remove_indirect_subscription(&mut self, topic: &Topic, parent_multitopic: &Topic) {
         if let Some(subscription_data) = self.subscriptions.get_mut(topic) {
-            debug!(
+            log::debug!(
                 "[Client] Client#{} indirectly unsubscribed from {:?}\n\tParent multitopic {:?}",
-                self.client_id, topic, parent_multitopic
+                self.client_id,
+                topic,
+                parent_multitopic,
             );
             subscription_data
                 .indirect_subscription_sources
@@ -208,7 +212,7 @@ impl Client {
             Ok(())
         } else {
             // client sent invalid pong message
-            warn!("got invalid pong message");
+            log::warn!("got invalid pong message");
             Err(Error::InvalidPongMessage)
         }
     }
@@ -262,7 +266,7 @@ impl Client {
 
             if let Some(latency_timer) = subscription_data.latency_timer.take() {
                 let latency = latency_timer.stop_and_record();
-                debug!(
+                log::debug!(
                     "Latency {}ms (delayed send), topic {:?}",
                     latency * 1_000_f64,
                     topic
@@ -292,7 +296,7 @@ impl Client {
         for (topic, subscription_data) in self.subscriptions.iter_mut() {
             if let Some(latency_timer) = subscription_data.latency_timer.take() {
                 let latency = latency_timer.stop_and_discard();
-                debug!(
+                log::debug!(
                     "Subscription aborted after {}ms waiting, topic {:?}",
                     latency * 1_000_f64,
                     topic
@@ -453,26 +457,30 @@ impl ClientIdsByTopics {
         client_id: ClientId,
         subscription_key: ClientSubscriptionKey,
     ) {
-        debug!(
+        log::debug!(
             "[ClientIdsByTopics] Client#{} directly subscribed to {:?}",
-            client_id, subscription_key
+            client_id,
+            subscription_key,
         );
         let mut changed = false;
         self.0
             .entry(topic)
             .and_modify(|key_info| {
-                debug!(
+                log::debug!(
                     "Found existing key_info `{:?}` (Client#{}, subscription_key={:?})",
-                    key_info, client_id, subscription_key
+                    key_info,
+                    client_id,
+                    subscription_key,
                 );
             })
             .or_insert_with(|| {
                 TOPIC_SUBSCRIBED.inc();
                 TOPICS.inc();
                 changed = true;
-                debug!(
+                log::debug!(
                     "Created new key_info (Client#{}, subscription_key={:?})",
-                    client_id, subscription_key
+                    client_id,
+                    subscription_key,
                 );
                 KeyInfo::new()
             })
@@ -486,25 +494,30 @@ impl ClientIdsByTopics {
 
     pub fn remove_subscription(&mut self, topic: &Topic, client_id: &ClientId) {
         if let Some(key_info) = self.0.get_mut(topic) {
-            debug!(
+            log::debug!(
                 "[ClientIdsByTopics] Client#{} directly unsubscribed from {:?}",
-                client_id, topic
+                client_id,
+                topic,
             );
             key_info.clients.remove(client_id);
             if key_info.clients.is_empty() && key_info.indirect_clients.is_empty() {
                 TOPIC_UNSUBSCRIBED.inc();
                 TOPICS.dec();
-                debug!(
+                log::debug!(
                     "Removing key_info for topic {:?} (due to Client#{}): {:?}",
-                    topic, client_id, key_info
+                    topic,
+                    client_id,
+                    key_info,
                 );
                 self.0.remove(topic);
                 TOPICS_HASHMAP_SIZE.set(self.0.len() as i64);
                 TOPICS_HASHMAP_CAPACITY.set(self.0.capacity() as i64);
             } else {
-                debug!(
+                log::debug!(
                     "Keeping key_info for topic {:?} (due to Client#{}): {:?}",
-                    topic, client_id, key_info
+                    topic,
+                    client_id,
+                    key_info,
                 );
             }
         }
@@ -521,22 +534,25 @@ impl ClientIdsByTopics {
             .0
             .entry(multitopic.clone())
             .and_modify(|key_info| {
-                debug!(
+                log::debug!(
                     "Found existing key_info `{:?}` for multitopic {:?}",
-                    key_info, multitopic
+                    key_info,
+                    multitopic,
                 );
             })
             .or_insert_with(|| {
                 TOPIC_SUBSCRIBED.inc();
                 TOPICS.inc();
                 changed = true;
-                debug!("Created new key_info for multitopic {:?}", multitopic);
+                log::debug!("Created new key_info for multitopic {:?}", multitopic);
                 KeyInfo::new()
             });
 
-        debug!(
+        log::debug!(
             "Updating multitopic {:?}: subtopics {:?}, current key_info {:?}",
-            multitopic, subtopics, key_info
+            multitopic,
+            subtopics,
+            key_info,
         );
 
         let added_subtopics = subtopics
@@ -574,18 +590,19 @@ impl ClientIdsByTopics {
         let mut changed = false;
 
         for topic in update.added_subtopics {
-            debug!(
+            log::debug!(
                 "[ClientIdsByTopics] Client#{} indirectly subscribed to {:?}",
-                client_id, topic
+                client_id,
+                topic,
             );
             self.0
                 .entry(topic.clone())
-                .and_modify(|_| debug!("Found existing key_info for subtopic {:?}", topic))
+                .and_modify(|_| log::debug!("Found existing key_info for subtopic {:?}", topic))
                 .or_insert_with(|| {
                     TOPIC_SUBSCRIBED.inc();
                     TOPICS.inc();
                     changed = true;
-                    debug!("Created new key_info for subtopic {:?}", topic);
+                    log::debug!("Created new key_info for subtopic {:?}", topic);
                     KeyInfo::new()
                 })
                 .indirect_clients
@@ -597,9 +614,10 @@ impl ClientIdsByTopics {
         for topic in update.removed_subtopics {
             if let Some(key_info) = self.0.get_mut(&topic) {
                 if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
-                    debug!(
+                    log::debug!(
                         "[ClientIdsByTopics] Client#{} indirectly unsubscribed from {:?}",
-                        client_id, topic
+                        client_id,
+                        topic,
                     );
                     multitopics.remove(&multitopic);
                     if multitopics.is_empty() {
@@ -610,15 +628,19 @@ impl ClientIdsByTopics {
                     TOPIC_UNSUBSCRIBED.inc();
                     TOPICS.dec();
                     changed = true;
-                    debug!(
+                    log::debug!(
                         "Removing key_info for subtopic {:?} (due to Client#{}): {:?}",
-                        topic, client_id, key_info
+                        topic,
+                        client_id,
+                        key_info,
                     );
                     self.0.remove(&topic);
                 } else {
-                    debug!(
+                    log::debug!(
                         "Keeping key_info for subtopic {:?} (due to Client#{}): {:?}",
-                        topic, client_id, key_info
+                        topic,
+                        client_id,
+                        key_info,
                     );
                 }
             }
@@ -645,9 +667,10 @@ impl ClientIdsByTopics {
             for topic in subtopics.iter() {
                 if let Some(key_info) = self.0.get_mut(topic) {
                     if let Some(multitopics) = key_info.indirect_clients.get_mut(client_id) {
-                        debug!(
+                        log::debug!(
                             "[ClientIdsByTopics] Client#{} indirectly unsubscribed from {:?}",
-                            client_id, topic
+                            client_id,
+                            topic,
                         );
                         multitopics.remove(multitopic);
                         if multitopics.is_empty() {
@@ -658,15 +681,19 @@ impl ClientIdsByTopics {
                         TOPIC_UNSUBSCRIBED.inc();
                         TOPICS.dec();
                         changed = true;
-                        debug!(
+                        log::debug!(
                             "Removing2 key_info for subtopic {:?} (due to Client#{}): {:?}",
-                            topic, client_id, key_info
+                            topic,
+                            client_id,
+                            key_info,
                         );
                         self.0.remove(topic);
                     } else {
-                        debug!(
+                        log::debug!(
                             "Keeping2 key_info for subtopic {:?} (due to Client#{}): {:?}",
-                            topic, client_id, key_info
+                            topic,
+                            client_id,
+                            key_info,
                         );
                     }
                 }

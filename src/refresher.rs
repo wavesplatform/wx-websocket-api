@@ -2,7 +2,6 @@ use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::select;
-use wavesexchange_log::{debug, timer, warn};
 
 use crate::client::Topics;
 use crate::error::Error;
@@ -28,7 +27,7 @@ impl<R: Repo> KeysRefresher<R> {
         loop {
             tokio::time::sleep(refresh_time).await;
 
-            timer!("Refresh loop iteration", level = debug);
+            log::timer!("Refresh loop iteration", level = debug);
 
             let topics_to_update = {
                 let mut topics_to_update = Vec::new();
@@ -45,7 +44,7 @@ impl<R: Repo> KeysRefresher<R> {
                         }
                     }
                     _ = tokio::time::sleep(get_read_guard_time) => {
-                        warn!("Refresh: cannot acquire read lock in {:?}, skip current refresh iteration", get_read_guard_time);
+                        log::warn!("Refresh: cannot acquire read lock in {:?}, skip current refresh iteration", get_read_guard_time);
                         continue;
                     }
                 }
@@ -55,8 +54,8 @@ impl<R: Repo> KeysRefresher<R> {
 
             if !topics_to_update.is_empty() {
                 let updated_topics = self.repo.refresh(topics_to_update).await?;
-                timer!("Refresh: store update timestamps", level = debug, verbose);
-                debug!("Refresh: storing {} timestamps", updated_topics.len());
+                log::timer!("Refresh: store update timestamps", level = debug, verbose);
+                log::debug!("Refresh: storing {} timestamps", updated_topics.len());
                 stream::iter(updated_topics)
                     .for_each_concurrent(10, |(topic, update_time)| async move {
                         self.topics.write().await.refresh_topic(topic, update_time)

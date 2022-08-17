@@ -1,7 +1,6 @@
 use crate::error::Error;
 use crate::metrics::REDIS_INPUT_QUEUE_SIZE;
 use std::convert::TryFrom;
-use wavesexchange_log::{debug, info};
 use wavesexchange_topic::Topic;
 
 pub fn run(
@@ -9,10 +8,10 @@ pub fn run(
     updater_timeout: Option<std::time::Duration>,
     updates_sender: tokio::sync::mpsc::UnboundedSender<(Topic, String)>,
 ) -> Result<(), Error> {
-    info!("updater started");
+    log::info!("updater started");
 
     loop {
-        debug!("get new redis connection");
+        log::debug!("get new redis connection");
 
         let mut conn = redis_client.get_connection()?;
         let mut pubsub = conn.as_pubsub();
@@ -32,7 +31,7 @@ pub fn run(
                 Err(error) => {
                     // error when socket don't response in time
                     if error.to_string().contains("os error 11") {
-                        info!("updater don't get new events, reopen connection");
+                        log::info!("updater don't get new events, reopen connection");
                         break;
                     }
 

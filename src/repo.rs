@@ -5,7 +5,6 @@ use bb8_redis::{bb8, redis::AsyncCommands, RedisConnectionManager};
 use futures::future;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use wavesexchange_log::{debug, timer};
 use wavesexchange_topic::Topic;
 
 use self::counter::VersionCounter;
@@ -92,8 +91,8 @@ impl Repo for RepoImpl {
     }
 
     async fn refresh(&self, mut topics: Vec<Topic>) -> Result<HashMap<Topic, Instant>, Error> {
-        timer!("Refresh: update TTLs in Redis", level = debug, verbose);
-        debug!("Refresh: updating TTLs of {} keys in Redis", topics.len());
+        log::timer!("Refresh: update TTLs in Redis", level = debug, verbose);
+        log::debug!("Refresh: updating TTLs of {} keys in Redis", topics.len());
         let key_ttl = self.key_ttl.as_secs() as usize;
         let mut tasks = Vec::with_capacity(self.refresh_threads);
         let n = topics.len() / self.refresh_threads;
@@ -114,7 +113,7 @@ impl Repo for RepoImpl {
                     con.expire(key, key_ttl).await?;
                     result.insert(topic, update_time);
                 }
-                debug!("Refresh: batch #{} ({} keys) completed", i, result.len());
+                log::debug!("Refresh: batch #{} ({} keys) completed", i, result.len());
                 Result::<_, Error>::Ok(result)
             });
             tasks.push(h);
