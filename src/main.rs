@@ -5,7 +5,6 @@ mod config;
 mod error;
 mod messages;
 mod metrics;
-mod models;
 mod refresher;
 mod repo;
 mod server;

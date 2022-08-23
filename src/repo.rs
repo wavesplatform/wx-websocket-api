@@ -108,7 +108,7 @@ impl Repo for RepoImpl {
                 let mut con = pool.get().await?;
                 let mut result = HashMap::new();
                 for topic in topics {
-                    let key = "sub:".to_string() + &String::from(topic.clone());
+                    let key = format!("sub:{}", topic);
                     let update_time = Instant::now();
                     con.expire(key, key_ttl).await?;
                     result.insert(topic, update_time);

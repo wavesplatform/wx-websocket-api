@@ -1,7 +1,6 @@
 use crate::error::Error;
 use crate::metrics::REDIS_INPUT_QUEUE_SIZE;
 use crate::topic::Topic;
-use std::convert::TryFrom;
 
 pub fn run(
     redis_client: redis::Client,
@@ -20,16 +19,25 @@ pub fn run(
         loop {
             match pubsub.get_message() {
                 Ok(msg) => {
-                    if let Ok(topic) = Topic::try_from(msg.get_channel_name()) {
-                        let value = msg.get_payload::<String>()?;
-                        REDIS_INPUT_QUEUE_SIZE.inc();
-                        updates_sender
-                            .send((topic, value))
-                            .expect("error occurred while sending resource update");
+                    let topic_str = msg.get_channel_name();
+                    match Topic::parse_str(topic_str) {
+                        Ok(topic) => {
+                            let value = msg.get_payload::<String>()?;
+                            REDIS_INPUT_QUEUE_SIZE.inc();
+                            updates_sender
+                                .send((topic, value))
+                                .expect("error occurred while sending resource update");
+                        }
+                        Err(e) => {
+                            // This really should never happen, because every topic that gets into Redis
+                            // is parsed and validated, so if we get something weird here it is either
+                            // a programming error or some manually-tampered data in Redis.
+                            log::warn!("Ignoring bad topic from Redis: '{}' ({:?})", topic_str, e);
+                        }
                     }
                 }
                 Err(error) => {
-                    // error when socket don't response in time
+                    // error when socket don't respond on time
                     if error.to_string().contains("os error 11") {
                         log::info!("updater don't get new events, reopen connection");
                         break;

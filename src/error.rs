@@ -1,4 +1,4 @@
-use crate::topic::Topic;
+use crate::topic::{Topic, TopicParseError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -20,40 +20,12 @@ pub enum Error {
     SendUpdateResourceError(#[from] tokio::sync::mpsc::error::SendError<Topic>),
     #[error("SendMessageError: {0}")]
     SendMessageError(#[from] tokio::sync::mpsc::error::SendError<warp::ws::Message>),
-    #[error("InvalidUpdateResource: {0}")]
-    InvalidUpdateResource(String),
-    #[error("InvalidConfigPath: {0}")]
-    InvalidConfigPath(String),
-    #[error("InvalidStatePath: {0}")]
-    InvalidStatePath(String),
-    #[error("InvalidSubscribeMessage")]
-    InvalidSubscribeMessage,
-    #[error("InvalidUnsubscribeMessage")]
-    InvalidUnsubscribeMessage,
     #[error("InvalidPongMessage")]
     InvalidPongMessage,
     #[error("UnknownIncomeMessage: {0}")]
     UnknownIncomeMessage(String),
-    #[error("InvalidTopic: {0}")]
-    InvalidTopic(String),
-    #[error("InvalidTransactionType: {0}")]
-    InvalidTransactionType(String),
-    #[error("InvalidTransactionPath: {0}")]
-    InvalidTransactionPath(String),
-    #[error("InvalidTransactionQuery: {0}")]
-    InvalidTransactionQuery(ErrorQuery),
-    #[error("InvalidLeasingPath: {0}")]
-    InvalidLeasingPath(String),
-}
-
-#[derive(Debug)]
-pub struct ErrorQuery(pub Option<String>);
-
-impl std::fmt::Display for ErrorQuery {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.as_ref() {
-            None => write!(f, "None"),
-            Some(s) => write!(f, "{}", s.to_owned()),
-        }
-    }
+    #[error("InvalidTopicFromClient: {0}")]
+    InvalidTopicFromClient(String),
+    #[error("InvalidTopicInRedis: {0}")]
+    InvalidTopicInRedis(TopicParseError),
 }
