@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
+use wx_topic::{StateSingle, Topic};
 
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
@@ -16,7 +17,6 @@ use crate::metrics::{
 };
 use crate::repo::Repo;
 use crate::shard::Sharded;
-use crate::topic::{StateSingle, Topic};
 
 use self::values::{DataEntry, TopicValue, TopicValues};
 

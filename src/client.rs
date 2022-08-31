@@ -4,7 +4,6 @@ use crate::metrics::{
     MESSAGES, TOPICS, TOPICS_HASHMAP_CAPACITY, TOPICS_HASHMAP_SIZE, TOPIC_SUBSCRIBED,
     TOPIC_UNSUBSCRIBED,
 };
-use crate::topic::Topic;
 use prometheus::HistogramTimer;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
+use wx_topic::Topic;
 
 pub type ClientId = usize;
 
@@ -770,7 +770,7 @@ mod tests {
 
     use super::ClientIdsByTopics;
     use crate::client::{leasing_balance_diff, ClientSubscriptionKey, LeasingBalance};
-    use crate::topic::Topic;
+    use wx_topic::Topic;
 
     #[test]
     fn should_correctly_update_multitopic_info() -> anyhow::Result<()> {

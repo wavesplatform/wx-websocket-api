@@ -1,11 +1,11 @@
 use crate::client::ClientId;
 use crate::error::Error;
-use crate::topic::Topic;
 use async_trait::async_trait;
 use bb8_redis::{bb8, redis::AsyncCommands, RedisConnectionManager};
 use futures::future;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use wx_topic::Topic;
 
 use self::counter::VersionCounter;
 

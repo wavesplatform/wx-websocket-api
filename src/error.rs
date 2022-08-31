@@ -1,4 +1,4 @@
-use crate::topic::{Topic, TopicParseError};
+use wx_topic::{Topic, TopicParseError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
