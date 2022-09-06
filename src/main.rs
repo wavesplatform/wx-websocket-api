@@ -1,11 +1,11 @@
 extern crate wavesexchange_log as log;
+extern crate wavesexchange_topic as wx_topic;
 
 mod client;
 mod config;
 mod error;
 mod messages;
 mod metrics;
-mod models;
 mod refresher;
 mod repo;
 mod server;

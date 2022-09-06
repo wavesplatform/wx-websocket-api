@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use warp::ws;
-use wavesexchange_topic::{State, StateSingle, Topic};
+use wx_topic::{StateSingle, Topic};
 
 use crate::client::{Client, ClientId, Clients, MultitopicUpdate, Subscribed, Topics};
 use crate::error::Error;
@@ -136,7 +136,7 @@ async fn run<R: Repo>(
 
                     if match handle_income_message(&repo, client, client_id, topics, &msg).await {
                         Err(Error::UnknownIncomeMessage(error)) => send_error(error, "Invalid message", INVALID_MESSAGE_ERROR_CODE, client, client_id).await,
-                        Err(Error::InvalidTopic(topic)) => {
+                        Err(Error::InvalidTopicFromClient(topic)) => {
                             log::debug!(
                                 "Bad request: Client#{} has sent invalid topic '{}' in message '{}'",
                                 client_id,
@@ -233,8 +233,19 @@ async fn handle_income_message<R: Repo>(
 
                         let latency_timer = SUBSCRIBED_MESSAGE_LATENCIES.start_timer();
 
-                        let topic = Topic::try_from(&client_subscription_key)?;
-                        let subscription_key = String::from(topic.clone());
+                        let topic = client_subscription_key.try_as_topic()?;
+                        let subscription_key = topic.to_string();
+
+                        // When topic URI is parsed there may some character substitutions occur,
+                        // like non-ASCII characters replaced with their percent-encoding.
+                        // For potential problems solving we better log it if this happens.
+                        if subscription_key.as_str() != client_subscription_key.as_str() {
+                            log::debug!(
+                                "Subscription key parsed with non-ASCII characters: '{}' -> '{}'",
+                                client_subscription_key.as_str(),
+                                subscription_key.as_str(),
+                            );
+                        }
 
                         if client_lock.contains_subscription(&topic) {
                             const ALREADY_SUBSCRIBED_ERROR_MESSAGE: &'static str =
@@ -313,13 +324,13 @@ async fn handle_income_message<R: Repo>(
                                 };
                                 topics_lock.update_indirect_subscriptions(topic, update, client_id);
                             }
-                            repo.subscribe(subscription_key.clone()).await?;
+                            repo.subscribe(subscription_key).await?;
                         }
                     }
                     IncomeMessage::Unsubscribe {
                         topic: client_subscription_key,
                     } => {
-                        let topic = Topic::try_from(&client_subscription_key)?;
+                        let topic = client_subscription_key.try_as_topic()?;
 
                         if client_lock.contains_subscription(&topic) {
                             client_lock.remove_direct_subscription(&topic);
@@ -554,10 +565,10 @@ pub async fn updates_handler<R: Repo>(
                         }
                         Err(err) => {
                             log::error!(
-                                "multitopic {} has unrecognized value {}; error = {}",
-                                format!("{:?}", topic),
+                                "Multitopic {:?} has unrecognized value '{}' in Redis; error = {}",
+                                topic,
                                 value,
-                                err; "topic" => format!("{:?}", topic)
+                                err; "topic" => format!("{}", topic)
                             );
                             Update::Ignore
                         }
@@ -663,7 +674,14 @@ where
     topics
         .into_iter()
         .map(|topic_url| {
-            Topic::try_from(topic_url).map_err(|_| Error::InvalidTopic(topic_url.to_owned()))
+            match Topic::parse_str(topic_url) {
+                Ok(topic) => Ok(topic),
+                Err(e) => {
+                    // This is a bad data coming from Redis,
+                    // it is either a programming error or manually-tampered data.
+                    Err(Error::InvalidTopicInRedis(e))
+                }
+            }
         })
         .collect()
 }
@@ -681,7 +699,7 @@ where
     let removed_topics = removed_topics.into_iter();
 
     let topics = updated_topics
-        .map(|topic| String::from(topic))
+        .map(|topic| topic.to_string())
         .collect::<Vec<_>>();
     let topics_len = topics.len();
     let values = repo.get_by_keys(topics).await?;
@@ -689,12 +707,13 @@ where
     let updated = values
         .into_iter()
         .filter_map(|maybe_value| maybe_value.map(|value| TopicValue::Raw(value)));
-    let removed = removed_topics.map(|topic| match topic {
-        Topic::State(State::Single(StateSingle { address, key })) => {
-            let entry = DataEntry::deleted(address, key);
-            TopicValue::DataEntry(entry)
-        }
-        _ => panic!("internal error: updated_topics contains unexpected topics"),
+    let removed = removed_topics.map(|topic| {
+        let topic_data = topic.data();
+        let StateSingle { address, key } = topic_data
+            .as_state_single()
+            .expect("internal error: updated_topics contains unexpected topics");
+        let entry = DataEntry::deleted(address.clone(), key.clone());
+        TopicValue::DataEntry(entry)
     });
     let res_list = updated.chain(removed).collect::<Vec<_>>();
     Ok(TopicValues(res_list))

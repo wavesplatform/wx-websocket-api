@@ -11,12 +11,32 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::Message;
-use wavesexchange_topic::Topic;
+use wx_topic::Topic;
 
 pub type ClientId = usize;
 
+/// A cheaply cloneable (`Arc` inside) string key which is usually a topic URI string.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ClientSubscriptionKey(pub String);
+pub struct ClientSubscriptionKey(Arc<String>);
+
+impl ClientSubscriptionKey {
+    pub fn new(topic: impl Into<String>) -> Self {
+        ClientSubscriptionKey(Arc::new(topic.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn into_inner(self) -> Arc<String> {
+        self.0
+    }
+
+    pub fn try_as_topic(&self) -> Result<Topic, Error> {
+        let topic_uri = self.0.as_str();
+        Topic::parse_str(topic_uri).map_err(|_| Error::InvalidTopicFromClient(topic_uri.to_owned()))
+    }
+}
 
 #[derive(Debug)]
 pub struct Client {
@@ -746,19 +766,19 @@ impl ClientIdsByTopics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, convert::TryFrom};
-    use wavesexchange_topic::Topic;
+    use std::collections::HashSet;
 
     use super::ClientIdsByTopics;
     use crate::client::{leasing_balance_diff, ClientSubscriptionKey, LeasingBalance};
+    use wx_topic::Topic;
 
     #[test]
     fn should_correctly_update_multitopic_info() -> anyhow::Result<()> {
         let multitopic_subscription_key = "topic://state?address__in[]=3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV&key__match_any[]=%s%s%s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__*";
-        let multitopic = Topic::try_from(multitopic_subscription_key)?;
+        let multitopic = Topic::parse_str(multitopic_subscription_key)?;
 
         let subtopic_subscription_key = "topic://state/3PPNhHYkkEy13gRWDCaruQyhNbX2GrjYSyV/%25s%25s%25s__staked__3PNVVvuvWqpTnHPgWDTtESJhsBTYdGc4eQ8__7KZbJrVopwJhkdwbe1eFDBbex4dkY63MxjTNjqXtrzj1";
-        let subtopic = Topic::try_from(subtopic_subscription_key)?;
+        let subtopic = Topic::parse_str(subtopic_subscription_key)?;
 
         let mut target = ClientIdsByTopics::default();
         let mut subtopics = HashSet::new();
@@ -774,8 +794,8 @@ mod tests {
         // Check whether adding subscriptions before update multitopic info is valid
         let mut target = ClientIdsByTopics::default();
 
-        let subscribtion_key = ClientSubscriptionKey(multitopic_subscription_key.to_owned());
-        target.add_subscription(multitopic.clone(), 1, subscribtion_key);
+        let subscription_key = ClientSubscriptionKey::new(multitopic_subscription_key);
+        target.add_subscription(multitopic.clone(), 1, subscription_key);
         let multitopic_update =
             target.update_multitopic_info(multitopic.clone(), subtopics.clone());
 
