@@ -33,8 +33,6 @@ async fn tokio_main() -> Result<(), Error> {
     let repo_config = config::load_repo()?;
     let server_config = config::load_server()?;
 
-    metrics::register_metrics();
-
     let redis_connection_url = format!(
         "redis://{}:{}@{}:{}/",
         repo_config.username, repo_config.password, repo_config.host, repo_config.port
@@ -86,6 +84,7 @@ async fn tokio_main() -> Result<(), Error> {
     let (shutdown_signal_tx, mut shutdown_signal_rx) = tokio::sync::mpsc::channel(1);
     let (server_stop_tx, server) = server::start(
         server_config.port,
+        server_config.metrics_port,
         repo,
         clients.clone(),
         topics,

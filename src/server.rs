@@ -1,18 +1,19 @@
 use futures::future::FutureExt;
-use prometheus::{Encoder, TextEncoder};
 use std::sync::Arc;
 use std::time::Duration;
-use warp::{Filter, Rejection, Reply};
+use warp::Filter;
 use wavesexchange_warp::log::access;
+use wavesexchange_warp::MetricsWarpBuilder;
 
 use crate::client::{Clients, Topics};
-use crate::metrics::REGISTRY;
+use crate::metrics::*;
 use crate::repo::Repo;
 use crate::shard::Sharded;
 use crate::websocket;
 
 pub struct ServerConfig {
     pub port: u16,
+    pub metrics_port: u16,
     pub client_ping_interval: u64,
     pub client_ping_failures_threshold: u16,
     pub graceful_shutdown_duration: Duration,
@@ -25,6 +26,7 @@ pub struct ServerOptions {
 
 pub fn start<R: Repo + 'static>(
     server_port: u16,
+    metrics_port: u16,
     repo: Arc<R>,
     clients: Arc<Sharded<Clients>>,
     topics: Arc<Topics>,
@@ -66,49 +68,29 @@ pub fn start<R: Repo + 'static>(
         )
         .with(warp::log::custom(access));
 
-    let metrics = warp::path!("metrics").and_then(metrics_handler);
-
     log::info!("websocket server listening on 0.0.0.0:{}", server_port);
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let (_addr, server) = warp::serve(ws.or(metrics)).bind_with_graceful_shutdown(
-        ([0, 0, 0, 0], server_port),
-        async {
+
+    let servers = MetricsWarpBuilder::new()
+        .with_main_routes(ws)
+        .with_main_routes_port(server_port)
+        .with_metrics_port(metrics_port)
+        .with_metric(&*CLIENTS)
+        .with_metric(&*CLIENT_CONNECT)
+        .with_metric(&*CLIENT_DISCONNECT)
+        .with_metric(&*TOPICS)
+        .with_metric(&*TOPIC_SUBSCRIBED)
+        .with_metric(&*TOPIC_UNSUBSCRIBED)
+        .with_metric(&*MESSAGES)
+        .with_metric(&*SUBSCRIBED_MESSAGE_LATENCIES)
+        .with_metric(&*REDIS_INPUT_QUEUE_SIZE)
+        .with_metric(&*TOPICS_HASHMAP_SIZE)
+        .with_metric(&*TOPICS_HASHMAP_CAPACITY)
+        .with_graceful_shutdown(async {
             let _ = rx.await;
-        },
-    );
-    (tx, server)
-}
+        })
+        .run_blocking();
 
-async fn metrics_handler() -> Result<impl Reply, Rejection> {
-    let encoder = TextEncoder::new();
-
-    let mut buffer = Vec::new();
-    if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
-        eprintln!("could not encode custom metrics: {}", e);
-    };
-    let mut res = match String::from_utf8(buffer.clone()) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("custom metrics could not be from_utf8'd: {}", e);
-            String::default()
-        }
-    };
-    buffer.clear();
-
-    let mut buffer = Vec::new();
-    if let Err(e) = encoder.encode(&prometheus::gather(), &mut buffer) {
-        eprintln!("could not encode prometheus metrics: {}", e);
-    };
-    let res_custom = match String::from_utf8(buffer.clone()) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("prometheus metrics could not be from_utf8'd: {}", e);
-            String::default()
-        }
-    };
-    buffer.clear();
-
-    res.push_str(&res_custom);
-    Ok(res)
+    (tx, servers)
 }

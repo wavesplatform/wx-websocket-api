@@ -36,31 +36,37 @@ fn default_refresh_threads() -> u16 {
     1
 }
 
+fn default_metrics_port() -> u16 {
+    9090
+}
+
 #[derive(Deserialize)]
 struct FlatServerConfig {
     #[serde(default = "default_port")]
-    pub port: u16,
+    port: u16,
+    #[serde(default = "default_metrics_port")]
+    metrics_port: u16,
     #[serde(default = "default_client_ping_interval_in_secs")]
-    pub client_ping_interval_in_secs: u64,
+    client_ping_interval_in_secs: u64,
     #[serde(default = "default_client_ping_failures_threshold")]
-    pub client_ping_failures_threshold: u16,
+    client_ping_failures_threshold: u16,
     #[serde(default = "default_graceful_shutdown_duration_seconds")]
-    pub graceful_shutdown_duration_seconds: u64,
+    graceful_shutdown_duration_seconds: u64,
 }
 
 #[derive(Deserialize)]
 struct FlatRepoConfig {
-    pub host: String,
+    host: String,
     #[serde(default = "default_repo_port")]
-    pub port: u16,
-    pub username: String,
-    pub password: String,
+    port: u16,
+    username: String,
+    password: String,
     #[serde(default = "default_key_ttl")]
-    pub key_ttl: u64,
+    key_ttl: u64,
     #[serde(default = "default_max_pool_size")]
-    pub max_pool_size: u32,
+    max_pool_size: u32,
     #[serde(default = "default_refresh_threads")]
-    pub refresh_threads: u16,
+    refresh_threads: u16,
 }
 
 pub mod app {
@@ -122,6 +128,7 @@ pub fn load_server() -> Result<server::ServerConfig, Error> {
 
     Ok(server::ServerConfig {
         port: flat_config.port,
+        metrics_port: flat_config.metrics_port,
         client_ping_interval: flat_config.client_ping_interval_in_secs,
         client_ping_failures_threshold: flat_config.client_ping_failures_threshold,
         graceful_shutdown_duration: Duration::from_secs(
