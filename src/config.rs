@@ -8,6 +8,10 @@ fn default_port() -> u16 {
     8080
 }
 
+fn default_metrics_port() -> u16 {
+    9090
+}
+
 fn default_repo_port() -> u16 {
     6379
 }
@@ -34,10 +38,6 @@ fn default_max_pool_size() -> u32 {
 
 fn default_refresh_threads() -> u16 {
     1
-}
-
-fn default_metrics_port() -> u16 {
-    9090
 }
 
 #[derive(Deserialize)]
