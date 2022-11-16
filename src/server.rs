@@ -90,7 +90,7 @@ pub fn start<R: Repo + 'static>(
         .with_graceful_shutdown(async {
             let _ = rx.await;
         })
-        .run_blocking();
+        .run_async();
 
     (tx, servers)
 }

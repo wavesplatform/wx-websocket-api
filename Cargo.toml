@@ -23,7 +23,7 @@ tokio = { version = "1.7", features = ["macros", "rt", "rt-multi-thread", "sync"
 warp = "0.3"
 wavesexchange_log = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_log/0.5.0" }
 wavesexchange_topic = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_topic/0.3.0" }
-wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.14.2" }
+wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.14.3" }
 
 [[bin]]
 name = "service"
