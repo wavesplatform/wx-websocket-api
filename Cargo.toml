@@ -1,29 +1,29 @@
 [package]
 name = "websocket-service"
-version = "1.5.8"
+version = "1.6.0"
 authors = ["Аleksej Petrov <apetrov@wavesplatform.com>", "Alex Kordys <akordys@web3tech.ru>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
 bb8 = "0.8"
-bb8-redis = "0.11"
+bb8-redis = "0.13"
 envy = "0.4"
 futures = "0.3"
 futures-util = "0.3"
 lazy_static = "1.4"
 prometheus = "0.13"
-redis = "0.21"
+redis = "0.23"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 slog = { version = "2.5", features = ["max_level_trace", "release_max_level_debug"] }
 thiserror = "1.0"
 tokio = { version = "1.7", features = ["macros", "rt", "rt-multi-thread", "sync", "signal"] }
 warp = "0.3"
-wavesexchange_log = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_log/0.5.0" }
-wavesexchange_topic = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_topic/0.3.0" }
-wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.12.2" }
+wavesexchange_log = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_log/0.5.1" }
+wavesexchange_topic = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_topic/0.4.3" }
+wavesexchange_warp = { git = "https://github.com/waves-exchange/wavesexchange-rs", tag = "wavesexchange_warp/0.14.6" }
 
 [[bin]]
 name = "service"
