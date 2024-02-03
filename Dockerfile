@@ -14,7 +14,7 @@ RUN cargo install --path .
 
 FROM debian:11
 WORKDIR /usr/www/app
-RUN apt-get update && apt-get install -y curl openssl libssl-dev
+RUN apt-get update && apt-get install -y curl openssl libssl-dev procps net-tools
 # RUN curl -ks 'https://cert.host.server/ssl_certs/EnterpriseRootCA.crt' -o '/usr/local/share/ca-certificates/EnterpriseRootCA.crt'
 RUN /usr/sbin/update-ca-certificates
 COPY --from=builder /usr/local/cargo/bin/service .
